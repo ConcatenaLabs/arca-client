@@ -11,7 +11,10 @@ function argv(command, a = {}) {
   const need = (ok, what) => { if (!ok) throw new Error(`${what} is not valid`); };
   const amount = (v) => { need(/^[0-9]+$/.test(String(v)), 'the amount'); return String(v); };
   switch (command) {
-    case 'info': case 'address': case 'balance': case 'coins': case 'boards': case 'mailbox':
+    // The Bitcoin side is read on its own queue (main.js): Bark lets one
+    // process at a time open its wallet.
+    case 'balance': return ['balance', '--without-bitcoin'];
+    case 'info': case 'address': case 'coins': case 'boards': case 'mailbox':
     case 'participations': case 'sync': case 'schedule': case 'recheck': case 'refusals': case 'restore':
       return [command];
     case 'record': need(LEAF.test(a.leaf_id), 'the coin'); return ['record', a.leaf_id];

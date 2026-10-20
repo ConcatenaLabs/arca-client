@@ -116,10 +116,17 @@ branch left on one laptop is invisible to every other machine and to the box.
   its note while the Bitcoin side (Bark) is not carried. A new rail is an
   entry in `src/main/rails.js` and its manager, never a special case in a
   screen.
+- **Bark stays upstream.** `build/BARK_COMMIT` names an upstream Bark
+  release and `build/bark-testnet4.patch` is the only change on it (testnet4,
+  offered upstream); the app must join any Bark ark. Nothing else of Bark is
+  patched here. The Bitcoin side runs on its own queue (`main.js`), because
+  Bark lets one process at a time open its wallet; every Bark run of the app
+  goes through it, and `arca balance` runs with `--without-bitcoin`.
 - **Tests.** `npm run lint` and `npm test` (the manager, the command
   whitelist, the scheduler, the rails and the settings, against a stand-in
-  `arca`) run in CI. The drive (`test/e2e/drive.mjs`) needs a running
-  operator and is run by hand; see the README.
+  `arca`) run in CI. The drives (`test/e2e/drive.mjs`, and
+  `drive-bitcoin.mjs` with a Bitcoin ark beside the operator) need running
+  harnesses and are run by hand; see the README.
 - **Windows.** `npm run dist:win` builds the zip on Linux once
   `build/arca-win-x64` is staged; the NSIS installer comes from the
   `windows` workflow on a Windows runner (`workflow_dispatch`). Nothing

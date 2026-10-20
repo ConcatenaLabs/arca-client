@@ -1,0 +1,2 @@
+# The patch is checked against its SHA-256: keep its bytes on every platform.
+build/bark-testnet4.patch -text

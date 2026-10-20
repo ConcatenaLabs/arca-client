@@ -119,7 +119,13 @@ test('a run holds none of the app\'s open descriptors', { skip: process.platform
   assert.ok(snapshot(report('direct')).length > 0, 'the control: a plain spawn from Electron passes its files on');
   const managed = report(null);
   assert.deepStrictEqual(snapshot(managed), [], 'the run holds none of them');
-  assert.ok(managed.every((f) => /^(socket|pipe|anon_inode):|^\/dev\/null$/.test(f) || !f.startsWith('/')), `the run holds no file of the app's: ${managed}`);
+  assert.ok(managed.every((f) => /^(socket|pipe|anon_inode):/.test(f) || !f.startsWith('/')), `the run holds no file of the app's: ${managed}`);
+  // Its standard error is the manager's, not /dev/null: what arca writes
+  // there (each coin's fee before a refresh signs, Bark's refusals) arrives.
+  // (Electron's own main process, with its many descriptors above 9, is
+  // where a redirection on the closing loop lost it; the Bitcoin drive
+  // checks a refusal of Bark's arrives there.)
+  assert.deepStrictEqual(report('notes'), ['a note on standard error']);
 });
 
 test('arguments pass through the shell untouched', { skip: process.platform === 'win32' }, async () => {

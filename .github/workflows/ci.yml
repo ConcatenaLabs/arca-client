@@ -1,7 +1,7 @@
 name: ci
 # Lint and tests on every change, and the Linux AppImage with the arca client
-# built at the pinned commit. Nothing is published: the AppImage is a CI
-# artifact.
+# built at the pinned commit and Bark's client and daemon built at the pinned
+# release with its patch. Nothing is published: the AppImage is a CI artifact.
 on:
   push:
     branches: [master]
@@ -45,20 +45,27 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/cache/target
-          key: arca-target-${{ hashFiles('build/ARCA_COMMIT') }}-linux
+            build/cache/target-bark
+          key: arca-target-${{ hashFiles('build/ARCA_COMMIT', 'build/BARK_COMMIT', 'build/bark-testnet4.patch') }}-linux
       - name: The arca client at the pinned commit
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/build/cache/target
         run: npm ci && npm run bundle:arca
+      - name: Bark at the pinned release, with its patch
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build/cache/target-bark
+        run: npm run bundle:bark
       - name: AppImage
         run: npm run dist:linux -- --publish never
       - name: No build path in what ships
         run: |
           set -euo pipefail
           app=$(ls dist/Arca-*-linux-x86_64.AppImage)
-          for p in "$GITHUB_WORKSPACE" "$HOME/.cargo" "$HOME/.rustup"; do
-            n=$(grep -a -c -F -- "$p" build/arca-linux-x64/bin/arca || true)
-            [ "$n" = 0 ] || { echo "arca holds $p"; exit 1; }
+          for b in build/arca-linux-x64/bin/arca build/bark-linux-x64/bin/bark build/bark-linux-x64/bin/barkd; do
+            for p in "$GITHUB_WORKSPACE" "$HOME/.cargo" "$HOME/.rustup"; do
+              n=$(grep -a -c -F -- "$p" "$b" || true)
+              [ "$n" = 0 ] || { echo "$b holds $p"; exit 1; }
+            done
           done
           ls -l "$app"
       - uses: actions/upload-artifact@v4

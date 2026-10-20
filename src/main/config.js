@@ -2,7 +2,8 @@
 // The app's settings, in <userData>/config.json, readable by its owner alone:
 // the node's RPC (its password included, as the wallet's own directory keeps
 // it), the operator's address, whether the wallet is the app's own or one
-// attached from the command line, and whether `sync` runs on its schedule.
+// attached from the command line, whether `sync` runs on its schedule, and the
+// Bitcoin side's network, ark and chain source.
 const fs = require('fs');
 const path = require('path');
 
@@ -16,6 +17,9 @@ function defaultConfig(home) {
     operator: { url: '', source: 'address' },
     autoSync: true,
     backedUp: false,
+    // The Bitcoin side: the network, the Bitcoin ark joined, and the chain
+    // source (a Bitcoin Core node of version 29 or later, or Esplora).
+    bitcoin: { network: 'testnet4', ark: '', source: 'bitcoind', bitcoind: 'http://127.0.0.1:48332/', cookie: '', user: '', password: '', esplora: '' },
   };
 }
 
@@ -28,6 +32,7 @@ function loadConfig(dir, defaults) {
   out.node = Object.assign({}, defaults.node, c.node || {});
   out.operator = Object.assign({}, defaults.operator, c.operator || {});
   out.attached = Object.assign({}, defaults.attached, c.attached || {});
+  out.bitcoin = Object.assign({}, defaults.bitcoin, c.bitcoin || {});
   if (!['bundled', 'attached'].includes(out.mode)) out.mode = 'bundled';
   return out;
 }

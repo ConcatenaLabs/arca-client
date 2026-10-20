@@ -1,6 +1,7 @@
 name: windows
 # The Windows build, on demand: the arca client built natively at the pinned
-# commit, then the zip and the one-file NSIS installer. It runs on a Windows
+# commit and Bark's client and daemon at the pinned release with its patch,
+# then the zip and the one-file NSIS installer. It runs on a Windows
 # runner because electron-builder's NSIS target edits the installer
 # executable, which on Linux needs wine. Nothing is published: both are CI
 # artifacts.
@@ -26,6 +27,11 @@ jobs:
         run: |
           export PROTOC="$(command -v protoc)"
           TARGET=x86_64-pc-windows-msvc bash build/make-arca-bundle.sh
+      - name: Bark at the pinned release, with its patch
+        shell: bash
+        run: |
+          export PROTOC="$(command -v protoc)"
+          TARGET=x86_64-pc-windows-msvc bash build/make-bark-bundle.sh
       - run: npm ci
       - name: Zip and installer
         shell: bash
