@@ -36,15 +36,19 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q protobuf-compiler
           rustup toolchain install stable --profile minimal
+      # The target directory lives beside the clone, not in it: a cache
+      # restored into the clone's directory would stop the clone.
       - name: Cargo cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            build/cache/arca/target
-          key: arca-${{ hashFiles('build/ARCA_COMMIT') }}-linux
+            build/cache/target
+          key: arca-target-${{ hashFiles('build/ARCA_COMMIT') }}-linux
       - name: The arca client at the pinned commit
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build/cache/target
         run: npm ci && npm run bundle:arca
       - name: AppImage
         run: npm run dist:linux -- --publish never
