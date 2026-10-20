@@ -34,6 +34,9 @@ esac
 
 echo "=== arca at $PIN ==="
 if [ ! -d "$ARCA_SRC/.git" ]; then
+  if [ -e "$ARCA_SRC" ] && [ -n "$(ls -A "$ARCA_SRC")" ]; then
+    echo "$ARCA_SRC exists and is not a clone of arca: move it away, or name a clone with ARCA_SRC" >&2; exit 1
+  fi
   mkdir -p "$(dirname "$ARCA_SRC")"
   git clone --quiet https://github.com/ConcatenaLabs/arca.git "$ARCA_SRC"
 fi
