@@ -125,3 +125,4 @@ td code, td .asset, td .st { white-space: nowrap; }
 td small { white-space: nowrap; }
 .headline .unit { color: var(--dim); font-size: 12.5px; margin-bottom: 6px; }
 #b-quote, #x-quote { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.kv > p { grid-column: 1 / -1; }
