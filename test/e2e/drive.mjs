@@ -328,7 +328,13 @@ async function main() {
   const paidOut = claimTx.vout.filter((o) => o.asset === X && o.value > 0).map((o) => Math.round(o.value * 1e8));
   check(paidOut.some((x) => x > 299000), 'the claim pays the leaf to the wallet, less its fee', paidOut);
   step = await exitRun('exit-4-follow');
-  check(/state: exited/.test(step), 'run 4: the coin is exited once its claim is final', step.match(/state: \S+/)?.[0]);
+  // The wallet answers a run on an exited coin with its state, or, when a
+  // sync has already followed the claim to its end, refuses it as exited.
+  check(/state: exited|is exited: there is nothing of the wallet's to exit/.test(step), 'run 4: the coin is exited once its claim is final',
+    (step.match(/state: \S+|is exited[^.]*/) || [])[0]);
+  const coinsNow = await walletRun(page, 'coins');
+  const exitedCoin = (Array.isArray(coinsNow.result) ? coinsNow.result : coinsNow.result.coins || []).find((c) => c.leaf_id === settled.leaf_id);
+  check(exitedCoin && exitedCoin.state === 'exited', 'the wallet holds the coin as exited', exitedCoin && exitedCoin.state);
   await shot(page, 'exit-4-exited');
 
   // --- 10. The schedule: the app syncs by itself on the library's schedule ---
