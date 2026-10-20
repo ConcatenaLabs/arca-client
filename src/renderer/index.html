@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+  <title>Arca</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="rail">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div>
+        <div class="name">Arca</div>
+        <div class="tag">Sequentia · Bitcoin</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <button class="nav" data-view="wallet">Wallet</button>
+      <button class="nav" data-view="board">Board</button>
+      <button class="nav" data-view="send">Send</button>
+      <button class="nav" data-view="receive">Receive</button>
+      <button class="nav" data-view="coins">Coins</button>
+      <button class="nav" data-view="schedule">Schedule</button>
+      <button class="nav" data-view="exit">Exit drill</button>
+      <button class="nav" data-view="refusals">Refusals</button>
+      <button class="nav" data-view="settings">Settings</button>
+    </nav>
+    <div class="rail-foot">
+      <div class="syncstate"><span id="sync-dot" class="dot off"></span><span id="sync-label" data-testid="sync-label">not synced</span></div>
+      <div id="run-label" class="runlabel" data-testid="run-label"></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- JOIN -->
+    <section class="view" data-view="join">
+      <header class="vhead"><h1>Join an operator</h1></header>
+      <p class="lead">This wallet holds every Sequentia asset as Arca coins against an operator you choose, and BTC on Bitcoin. It reads the chain only from your own Sequentia Core node.</p>
+
+      <div class="panel">
+        <h2 class="sub">1 · Your Sequentia node</h2>
+        <div class="grid2">
+          <label>RPC address<input id="j-node-url" data-testid="node-url" placeholder="http://127.0.0.1:18332/"></label>
+          <label>Cookie file (or leave empty and give a user)<input id="j-node-cookie" data-testid="node-cookie" placeholder="/path/to/.cookie"></label>
+          <label>RPC user<input id="j-node-user" data-testid="node-user" autocomplete="off"></label>
+          <label>RPC password<input id="j-node-pass" data-testid="node-pass" type="password" autocomplete="off"></label>
+        </div>
+        <div class="row"><button id="j-node-test" class="ghost" data-testid="node-test">Test the node</button></div>
+        <div id="j-node-msg" class="msg" data-testid="node-msg"></div>
+        <p class="hint">The wallet needs a node that keeps a transaction index (<code>-txindex</code>) and validates its Bitcoin anchors (<code>-validateanchor</code>): finality on Sequentia is the node's, and it follows Bitcoin.</p>
+      </div>
+
+      <div class="panel">
+        <h2 class="sub">2 · The operator</h2>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="op-src" value="address" checked> By address</label>
+          <label class="disabled"><input type="radio" name="op-src" value="registry" disabled> From the registry (not offered by this build)</label>
+        </div>
+        <label>Operator address<input id="j-op-url" data-testid="operator-url" placeholder="https://operator.example/arca"></label>
+        <p class="hint">The wallet pins the operator's key when it joins and shows it: compare it with the key the operator publishes through a channel you trust.</p>
+      </div>
+
+      <div class="panel">
+        <h2 class="sub">3 · Your wallet</h2>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="w-src" value="new" checked data-testid="wallet-new"> A new wallet</label>
+          <label><input type="radio" name="w-src" value="restore" data-testid="wallet-restore"> Restore from a mnemonic</label>
+        </div>
+        <textarea id="j-mnemonic" rows="3" data-testid="mnemonic-in" placeholder="twelve or twenty-four words" hidden></textarea>
+        <div class="row"><button id="j-join" class="primary" data-testid="join">Join</button></div>
+        <div id="j-msg" class="msg" data-testid="join-msg"></div>
+      </div>
+
+      <div id="j-done" class="panel" hidden data-testid="join-done">
+        <h2 class="sub">Joined</h2>
+        <div id="j-done-body"></div>
+        <div id="j-backup" hidden>
+          <h2 class="sub">Write down your mnemonic</h2>
+          <p class="hint">It is the only way back to this wallet on another machine: it restores every coin the operator serves to it and every on-chain coin. Anyone who has it can spend them.</p>
+          <div id="j-words" class="words" data-testid="mnemonic-words"></div>
+        </div>
+        <div class="row"><button id="j-continue" class="primary" data-testid="join-continue">I wrote it down · open the wallet</button></div>
+      </div>
+    </section>
+
+    <!-- WALLET -->
+    <section class="view" data-view="wallet">
+      <header class="vhead"><h1>Wallet</h1><div><button class="ghost" id="w-refresh" data-testid="wallet-refresh">Refresh</button> <button class="ghost" id="w-sync" data-testid="sync-now">Sync now</button></div></header>
+      <div class="headline panel">
+        <div class="k">Total</div>
+        <div id="w-total" class="total" data-testid="total"></div>
+        <div id="w-total-unit" class="unit"></div>
+        <div id="w-total-note" class="hint" data-testid="total-note"></div>
+      </div>
+      <div id="w-rows" class="rows" data-testid="balance-rows"></div>
+      <div id="w-msg" class="msg"></div>
+    </section>
+
+    <!-- BOARD -->
+    <section class="view" data-view="board">
+      <header class="vhead"><h1>Board</h1></header>
+      <p class="lead">Boarding brings on-chain coins into Arca. Pay the wallet's on-chain address first; the board is spendable once its transaction is final.</p>
+      <div class="panel">
+        <h2 class="sub">On-chain address</h2>
+        <div class="row"><button id="b-addr" class="ghost" data-testid="get-address">New address</button></div>
+        <div id="b-addr-out" class="request" data-testid="address"></div>
+      </div>
+      <div class="panel">
+        <h2 class="sub">Board</h2>
+        <div class="grid3">
+          <label>Asset<input id="b-asset" data-testid="board-asset" placeholder="asset id" list="asset-list"></label>
+          <label>Amount (atoms)<input id="b-amount" data-testid="board-amount" inputmode="numeric"></label>
+          <label>Fee asset (the boarded one unless named)<input id="b-fee" data-testid="board-fee-asset" placeholder="asset id" list="asset-list"></label>
+        </div>
+        <div class="row"><button id="b-go" class="primary" data-testid="board-go">Show the fee</button></div>
+        <div id="b-quote" hidden data-testid="board-quote">
+          <div id="b-quote-body"></div>
+          <div class="row"><button id="b-sign" class="primary" data-testid="board-sign">Sign and board</button> <button id="b-cancel" class="ghost">Cancel</button></div>
+        </div>
+        <div id="b-msg" class="msg" data-testid="board-msg"></div>
+      </div>
+      <h2 class="sub">Boards</h2>
+      <div id="b-list" data-testid="boards"></div>
+    </section>
+
+    <!-- SEND -->
+    <section class="view" data-view="send">
+      <header class="vhead"><h1>Send</h1></header>
+      <div class="panel">
+        <label>Receive request<textarea id="s-req" rows="3" data-testid="send-request" placeholder="the receiver's request"></textarea></label>
+        <div class="grid2">
+          <label>Amount (atoms, when the request names none)<input id="s-amount" data-testid="send-amount" inputmode="numeric"></label>
+          <label>Asset (when the request names none)<input id="s-asset" data-testid="send-asset" placeholder="asset id" list="asset-list"></label>
+        </div>
+        <div class="row"><button id="s-go" class="primary" data-testid="send-go">Send</button></div>
+        <div id="s-msg" class="msg" data-testid="send-msg"></div>
+      </div>
+    </section>
+
+    <!-- RECEIVE -->
+    <section class="view" data-view="receive">
+      <header class="vhead"><h1>Receive</h1></header>
+      <div class="panel">
+        <p class="hint">A request is for one payment: it carries a fresh key of the wallet's and lapses 27 days after it is made. The payment arrives in the wallet's mailbox, which every sync reads.</p>
+        <div class="grid2">
+          <label>Asset (optional)<input id="r-asset" data-testid="receive-asset" placeholder="asset id" list="asset-list"></label>
+          <label>Amount (optional, atoms)<input id="r-amount" data-testid="receive-amount" inputmode="numeric"></label>
+        </div>
+        <div class="row"><button id="r-go" class="primary" data-testid="receive-go">Make a request</button></div>
+        <div id="r-msg" class="msg" data-testid="receive-msg"></div>
+        <div id="r-out" hidden>
+          <div id="r-req" class="request" data-testid="request"></div>
+          <div class="row"><button id="r-copy" class="ghost" data-testid="request-copy">Copy</button><span id="r-copied" class="okline" data-testid="request-copied"></span></div>
+        </div>
+      </div>
+      <h2 class="sub">Requests waiting for a payment</h2>
+      <div id="r-list" data-testid="requests"></div>
+    </section>
+
+    <!-- COINS -->
+    <section class="view" data-view="coins">
+      <header class="vhead"><h1>Coins</h1><div><button class="ghost" id="c-refresh">Refresh</button> <button class="ghost" id="c-settle-all" data-testid="settle-all">Settle all now</button></div></header>
+      <p class="hint">A coin received out of round is <b>operator-confirmed</b>: it relies on the operator and its sender not colluding. Settling it now takes it into the operator's next round, which removes that reliance. In a coin's free window the refresh costs nothing.</p>
+      <div id="c-quote" class="panel" hidden data-testid="quote">
+        <h2 class="sub">Settle now · the fees, before anything is signed</h2>
+        <div id="c-quote-body"></div>
+        <div class="row"><button id="c-quote-go" class="primary" data-testid="quote-confirm">Sign and settle</button> <button id="c-quote-cancel" class="ghost">Cancel</button></div>
+        <div id="c-quote-msg" class="msg" data-testid="quote-msg"></div>
+      </div>
+      <div id="c-list" data-testid="coins"></div>
+      <div id="c-msg" class="msg" data-testid="coins-msg"></div>
+    </section>
+
+    <!-- SCHEDULE -->
+    <section class="view" data-view="schedule">
+      <header class="vhead"><h1>Schedule</h1><div><label class="toggle"><input type="checkbox" id="sc-auto" data-testid="auto-sync"> Sync on the schedule</label> <button class="ghost" id="sc-sync">Sync now</button></div></header>
+      <div class="panel">
+        <div class="kv" id="sc-next" data-testid="schedule-next"></div>
+        <div id="sc-note" class="hint" data-testid="schedule-note"></div>
+      </div>
+      <h2 class="sub">Coin dates</h2>
+      <div id="sc-coins" data-testid="schedule-coins"></div>
+      <h2 class="sub">Syncs</h2>
+      <div id="sc-hist" data-testid="sync-history"></div>
+    </section>
+
+    <!-- EXIT -->
+    <section class="view" data-view="exit">
+      <header class="vhead"><h1>Exit drill</h1></header>
+      <p class="lead">An exit takes a coin to the chain from its record alone, without the operator: each step of its path, then, once its exit delay has run, the claim to an address of the wallet's. Run it as often as you like; each run goes as far as the chain allows.</p>
+      <div class="panel">
+        <label>Coin<select id="x-coin" data-testid="exit-coin"></select></label>
+        <label>Fee asset, where the coin's own reserves cannot pay (optional)<input id="x-fee" data-testid="exit-fee-asset" placeholder="asset id" list="asset-list"></label>
+        <div class="row"><button id="x-go" class="primary" data-testid="exit-go">Show the next step</button></div>
+        <div id="x-quote" hidden data-testid="exit-quote">
+          <div id="x-quote-body"></div>
+          <div class="row"><button id="x-sign" class="primary" data-testid="exit-sign">Broadcast</button> <button id="x-cancel" class="ghost">Cancel</button></div>
+        </div>
+        <div id="x-msg" class="msg" data-testid="exit-msg"></div>
+      </div>
+      <div id="x-log" data-testid="exit-log"></div>
+    </section>
+
+    <!-- REFUSALS -->
+    <section class="view" data-view="refusals">
+      <header class="vhead"><h1>Refusals</h1><button class="ghost" id="f-refresh">Refresh</button></header>
+      <p class="hint">Every refusal, in the wallet's own words: what the wallet refused, and what the operator or the node refused it.</p>
+      <h2 class="sub">This session</h2>
+      <div id="f-session" data-testid="session-refusals"></div>
+      <h2 class="sub">The wallet's record</h2>
+      <div id="f-list" data-testid="refusals"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" data-view="settings">
+      <header class="vhead"><h1>Settings</h1></header>
+      <div class="panel">
+        <h2 class="sub">Wallet</h2>
+        <div id="st-wallet" class="kv"></div>
+      </div>
+      <div class="panel">
+        <h2 class="sub">Node and operator</h2>
+        <div id="st-pinned" class="kv" data-testid="settings-pinned"></div>
+        <div class="row"><button id="st-node-test" class="ghost">Test the node</button></div>
+        <div id="st-node-msg" class="msg"></div>
+      </div>
+      <div class="panel">
+        <h2 class="sub">The client</h2>
+        <div class="seg">
+          <label><input type="radio" name="st-mode" value="bundled"> The client this app carries, and the app's own wallet directory</label>
+          <label><input type="radio" name="st-mode" value="attached"> Attach: an <code>arca</code> you run yourself, and its wallet directory</label>
+        </div>
+        <div class="grid2">
+          <label>arca binary<input id="st-bin" placeholder="/usr/local/bin/arca"></label>
+          <label>Wallet directory<input id="st-dir" placeholder="~/.arca"></label>
+        </div>
+        <div class="row"><button id="st-mode-save" class="ghost">Apply</button></div>
+        <div id="st-mode-msg" class="msg"></div>
+      </div>
+      <div class="panel">
+        <h2 class="sub">Log</h2>
+        <pre id="st-log" class="log"></pre>
+      </div>
+    </section>
+  </main>
+  <datalist id="asset-list"></datalist>
+  <script src="renderer.js"></script>
+</body>
+</html>
