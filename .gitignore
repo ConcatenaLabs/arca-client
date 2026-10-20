@@ -1,0 +1,7 @@
+node_modules/
+dist/
+build/cache/
+build/arca-linux-x64/
+build/arca-win-x64/
+test-results/
+*.log

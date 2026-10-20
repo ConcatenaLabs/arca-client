@@ -1,0 +1,53 @@
+{
+  "name": "arca-client",
+  "productName": "Arca",
+  "version": "0.1.0",
+  "description": "The Arca client: a desktop app to join an Arca operator and use it as a dual-chain wallet, every Sequentia asset as Arca coins and BTC on Bitcoin. It carries the Arca command-line client.",
+  "author": "Concatena Labs",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "lint": "eslint .",
+    "test": "node --test test/*.test.js",
+    "bundle:arca": "bash build/make-arca-bundle.sh",
+    "icon": "node build/make-icon.js",
+    "drive": "node test/e2e/drive.mjs",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:win": "electron-builder --win zip"
+  },
+  "build": {
+    "appId": "com.concatenalabs.arca",
+    "productName": "Arca",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["src/**/*", "package.json", "build/icon.png"],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Finance",
+      "icon": "build/icon.png",
+      "artifactName": "Arca-${version}-linux-x86_64.${ext}",
+      "extraResources": [ { "from": "build/arca-linux-x64", "to": "arca" } ]
+    },
+    "win": {
+      "target": ["nsis", "zip"],
+      "signAndEditExecutable": false,
+      "artifactName": "Arca-${version}-win64.${ext}",
+      "extraResources": [ { "from": "build/arca-win-x64", "to": "arca" } ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Arca-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "Arca"
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "electron": "33.4.11",
+    "electron-builder": "^25.0.0",
+    "eslint": "^10.0.0",
+    "globals": "^17.0.0",
+    "playwright-core": "^1.56.0"
+  }
+}
