@@ -240,6 +240,7 @@ async function fillBtcRow(btcRail) {
 
 // --- bitcoin ------------------------------------------------------------------------------
 let btcInfo = null;
+let btcFormFilled = false;
 function btcShow(el, out, okText, context) { show(el, out, okText, `bitcoin ${context}`); }
 function srcKind() { return document.querySelector('input[name=bt-src]:checked').value; }
 for (const r of document.querySelectorAll('input[name=bt-src]')) {
@@ -256,19 +257,26 @@ loaders.bitcoin = async () => {
   const b = state.bitcoin;
   $('bt-none').hidden = b.wallet; $('bt-has').hidden = !b.wallet;
   if (!b.wallet) {
-    const st = b.settings;
-    $('bt-net').value = st.network || 'testnet4';
-    if (!$('bt-ark').value) {
-      // The operator may name a Bitcoin ark of its own: offered, not imposed.
-      let ark = st.ark;
-      if (!ark && state.joined) { const i = await run('info'); if (i.ok) ark = (((i.result.server_info || {}).lightning || {}).bitcoin || {}).ark || ''; }
-      $('bt-ark').value = ark || '';
+    // The form is filled from the settings once, before anything is
+    // awaited, so nothing typed into it is overwritten later.
+    if (!btcFormFilled) {
+      btcFormFilled = true;
+      const st = b.settings;
+      $('bt-net').value = st.network || 'testnet4';
+      $('bt-ark').value = st.ark || '';
+      $('bt-core-url').value = st.bitcoind || '';
+      $('bt-core-cookie').value = st.cookie || '';
+      $('bt-core-user').value = st.user || ''; $('bt-esplora-url').value = st.esplora || '';
+      for (const r of document.querySelectorAll('input[name=bt-src]')) r.checked = r.value === (st.source || 'bitcoind');
+      $('bt-core').hidden = srcKind() !== 'bitcoind'; $('bt-esplora').hidden = srcKind() !== 'esplora';
     }
-    if (!$('bt-core-url').value) $('bt-core-url').value = st.bitcoind || '';
-    if (!$('bt-core-cookie').value) $('bt-core-cookie').value = st.cookie || '';
-    $('bt-core-user').value = st.user || ''; $('bt-esplora-url').value = st.esplora || '';
-    for (const r of document.querySelectorAll('input[name=bt-src]')) r.checked = r.value === (st.source || 'bitcoind');
-    $('bt-core').hidden = srcKind() !== 'bitcoind'; $('bt-esplora').hidden = srcKind() !== 'esplora';
+    // The operator may name a Bitcoin ark of its own: offered, not imposed,
+    // and only into an empty field.
+    if (!$('bt-ark').value && state.joined) {
+      const i = await run('info');
+      const ark = i.ok ? (((i.result.server_info || {}).lightning || {}).bitcoin || {}).ark || '' : '';
+      if (ark && !$('bt-ark').value) $('bt-ark').value = ark;
+    }
     return;
   }
   await btcSummaryLoad();
