@@ -42,8 +42,11 @@ class RunError extends Error {
 }
 
 // The answer of one run, from its exit status, its standard output and its
-// standard error. Exported for the tests.
-function parseRun(code, signal, stdout, stderr) {
+// standard error. Exported for the tests. With `bark` (a run of Bark's own
+// command, `arca bitcoin …`), a bare answer is taken as text (`bark address`
+// prints an address, not JSON), and a refusal is Bark's words on its standard
+// error.
+function parseRun(code, signal, stdout, stderr, opts = {}) {
   const notes = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
     .map((l) => l.replace(/^arca: /, ''));
   let json = null;
@@ -54,6 +57,8 @@ function parseRun(code, signal, stdout, stderr) {
   if (code === 0 && json !== null && !(json && json.error && Object.keys(json).length === 1)) {
     return { ok: true, result: json, notes };
   }
+  if (opts.bark && code === 0 && json === null && text) return { ok: true, result: text, notes };
+  if (opts.bark && code === 0 && !text) return { ok: true, result: null, notes };
   if (json && json.error && typeof json.error.message === 'string') {
     // arca also writes the refusal on its standard error: it is the refusal,
     // not a note beside it.
@@ -61,6 +66,9 @@ function parseRun(code, signal, stdout, stderr) {
   }
   // Not an answer of the wallet's: the binary is missing, crashed, or was
   // stopped. Say exactly what happened.
+  if (opts.bark && !signal && notes.length) {
+    return { ok: false, refusal: { kind: 'bark', message: notes.map((n) => n.replace(/^Error: /, '')).join(' · ') }, notes: [] };
+  }
   const why = signal ? `arca was stopped (${signal})` : `arca exited ${code} without an answer`;
   const tail = notes.slice(-3).join(' · ');
   return { ok: false, refusal: { kind: 'client', message: tail ? `${why}: ${tail}` : why }, notes };
@@ -104,7 +112,7 @@ class ArcaRunner {
   }
 
   // Runs `arca <args…>` after every run queued before it. `opts`: {stdin,
-  // env, deadlineMs}. Resolves to {result, notes}; rejects with a RunError
+  // env, deadlineMs, bark (a run of Bark's own command)}. Resolves to {result, notes}; rejects with a RunError
   // carrying the refusal verbatim.
   run(args, opts = {}) {
     if (this.stopping) return Promise.reject(new RunError({ kind: 'client', message: 'the app is stopping: nothing more is run' }));
@@ -156,7 +164,7 @@ class ArcaRunner {
       proc.on('close', (code, signal) => {
         clearTimeout(timer);
         this.current = null;
-        const out = parseRun(code, signal, stdout, stderr);
+        const out = parseRun(code, signal, stdout, stderr, { bark: !!opts.bark });
         if (timedOut && !out.ok && out.refusal.kind === 'client') {
           out.refusal.message = `arca ${command} ran past its deadline (${Math.round(deadline / 1000)} s) and was stopped`;
         }
@@ -214,11 +222,15 @@ class ArcaRunner {
 // own process holds files and sockets of its window that Chromium opened
 // without close-on-exec, and a wallet process has no business holding them.
 // (dash, often /bin/sh, cannot name a descriptor above 9.) Without bash, and
-// on Windows, arca is started directly.
+// on Windows, arca is started directly. No redirection may sit on the `eval`:
+// an `exec` run inside it makes the eval's own redirections permanent, and a
+// `2>/dev/null` there would send every note and refusal arca writes on its
+// standard error to /dev/null. Closing a descriptor needs none: it says
+// nothing, and one already gone (the glob's own) is no error.
 const BASH = ['/bin/bash', '/usr/bin/bash'].find((b) => { try { return fs.existsSync(b); } catch { return false; } });
 function cleanSpawn(bin, args) {
   if (process.platform === 'win32' || !BASH) return [bin, args];
-  const script = 'for p in /dev/fd/*; do n=${p##*/}; case $n in 0|1|2) ;; *) eval "exec $n>&-" 2>/dev/null ;; esac; done; exec "$0" "$@"';
+  const script = 'for p in /dev/fd/*; do n=${p##*/}; case $n in 0|1|2) ;; *) eval "exec $n>&-" ;; esac; done; exec "$0" "$@"';
   return [BASH, ['-c', script, bin, ...args]];
 }
 

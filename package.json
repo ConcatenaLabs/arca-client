@@ -2,7 +2,7 @@
   "name": "arca-client",
   "productName": "Arca",
   "version": "0.1.0",
-  "description": "The Arca client: a desktop app to join an Arca operator and use it as a dual-chain wallet, every Sequentia asset as Arca coins and BTC on Bitcoin. It carries the Arca command-line client.",
+  "description": "The Arca client: a desktop app to join an Arca operator and use it as a dual-chain wallet, every Sequentia asset as Arca coins and BTC in a Bitcoin ark. It carries the Arca command-line client and Bark's client.",
   "author": "Concatena Labs",
   "license": "MIT",
   "main": "src/main/main.js",
@@ -11,8 +11,10 @@
     "lint": "eslint .",
     "test": "node --test test/*.test.js",
     "bundle:arca": "bash build/make-arca-bundle.sh",
+    "bundle:bark": "bash build/make-bark-bundle.sh",
     "icon": "node build/make-icon.js",
     "drive": "node test/e2e/drive.mjs",
+    "drive:bitcoin": "node test/e2e/drive-bitcoin.mjs",
     "dist:linux": "electron-builder --linux AppImage",
     "dist:win": "electron-builder --win zip"
   },
@@ -26,13 +28,23 @@
       "category": "Finance",
       "icon": "build/icon.png",
       "artifactName": "Arca-${version}-linux-x86_64.${ext}",
-      "extraResources": [ { "from": "build/arca-linux-x64", "to": "arca" } ]
+      "extraResources": [
+        { "from": "build/arca-linux-x64", "to": "arca" },
+        { "from": "build/bark-linux-x64/bin", "to": "arca/bin" },
+        { "from": "build/bark-linux-x64/VERSION", "to": "arca/BARK_VERSION" },
+        { "from": "build/bark-linux-x64/LICENSE", "to": "arca/BARK_LICENSE" }
+      ]
     },
     "win": {
       "target": ["nsis", "zip"],
       "signAndEditExecutable": false,
       "artifactName": "Arca-${version}-win64.${ext}",
-      "extraResources": [ { "from": "build/arca-win-x64", "to": "arca" } ]
+      "extraResources": [
+        { "from": "build/arca-win-x64", "to": "arca" },
+        { "from": "build/bark-win-x64/bin", "to": "arca/bin" },
+        { "from": "build/bark-win-x64/VERSION", "to": "arca/BARK_VERSION" },
+        { "from": "build/bark-win-x64/LICENSE", "to": "arca/BARK_LICENSE" }
+      ]
     },
     "nsis": {
       "oneClick": true,

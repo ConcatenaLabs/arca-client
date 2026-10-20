@@ -178,7 +178,7 @@ async function main() {
   const rows = await page.$$eval('[data-testid=balance-rows] > .bal', (els) => els.map((e) => e.getAttribute('data-testid')));
   check(rows[0] === 'row-BTC', 'BTC\'s row comes first', rows);
   const btc = await page.textContent('[data-testid=row-BTC]');
-  check(/0 sat/.test(btc) && /Bark/.test(btc), 'BTC shows 0 with what the Bitcoin side needs', btc.replace(/\s+/g, ' '));
+  check(/0 sat/.test(btc) && /Bark|Bitcoin ark/.test(btc), 'BTC shows 0 with what the Bitcoin side needs', btc.replace(/\s+/g, ' '));
   await shot(page, 'wallet-empty-btc-first');
 
   // --- 5. Board ---

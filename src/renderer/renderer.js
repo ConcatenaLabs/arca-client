@@ -186,9 +186,7 @@ loaders.wallet = async () => {
     const isBtc = row.asset === 'BTC';
     const parts = [];
     if (isBtc) {
-      parts.push(h('div', { class: 'split' }, btcRail ? btcRail.note : ''));
-      // What the wallet says of its Bitcoin side, once this build carries it.
-      if (btcRail && btcRail.installed && b.bitcoin && b.bitcoin.note) parts.push(h('div', { class: 'split dim' }, b.bitcoin.note));
+      parts.push(h('div', { class: 'split', 'data-testid': 'btc-row-split' }, btcRail ? btcRail.note : ''));
     } else {
       const states = (b.arca && b.arca[row.asset]) || {};
       const bits = [];
@@ -201,9 +199,10 @@ loaders.wallet = async () => {
     rows.append(h('div', { class: `bal${isBtc ? ' btc' : ''}`, 'data-testid': `row-${isBtc ? 'BTC' : row.asset}` },
       h('div', { class: 'top' }, isBtc ? h('span', { class: 'asset' }, 'BTC') : assetEl(row.asset),
         h('span', { class: 'chain' }, isBtc ? 'Bitcoin' : 'Sequentia')),
-      h('div', { class: 'total', 'data-testid': 'row-total' }, `${group(row.total)} ${row.unit === 'sat' ? 'sat' : 'atoms'}`),
+      h('div', { class: 'total', 'data-testid': 'row-total' }, row.total == null ? '…' : `${group(row.total)} ${row.unit === 'sat' ? 'sat' : 'atoms'}`),
       ...parts));
   }
+  fillBtcRow(btcRail);
   if (b.total && b.total.unvalued) rows.append(h('p', { class: 'hint' }, `Not in the total, the node having no rate for them: ${b.total.unvalued.map(assetName).join(', ')}.`));
   fillAssets(b);
 };
@@ -215,6 +214,243 @@ function fillAssets(b) {
   const dl = clear($('asset-list'));
   for (const id of ids) dl.append(h('option', { value: id }, assetName(id)));
 }
+
+// BTC's row, from the Bitcoin side's own queue: Bark's ark balance and its
+// on-chain wallet, counted as the wallet counts them.
+async function fillBtcRow(btcRail) {
+  const row = document.querySelector('[data-testid=row-BTC]');
+  if (!row) return;
+  const total = row.querySelector('[data-testid=row-total]');
+  const split = row.querySelector('[data-testid=btc-row-split]');
+  if (!btcRail || !btcRail.installed) { total.textContent = '0 sat'; return; }
+  const out = await arca.btcSummary();
+  if (!out.ok) { total.textContent = '—'; split.textContent = `The Bitcoin side could not be read: ${out.refusal.message}`; return; }
+  const r = out.result;
+  if (!r.wallet) { total.textContent = '0 sat'; split.textContent = 'No Bitcoin ark wallet yet: join a Bitcoin ark under Bitcoin.'; return; }
+  total.textContent = `${group(r.total)} sat`;
+  const a = r.ark;
+  const bits = [`${group(a.spendable_sat)} in the ark`];
+  for (const [k, label] of [['pending_in_round_sat', 'in a round'], ['pending_board_sat', 'boarding'], ['pending_exit_sat', 'exiting'],
+    ['pending_lightning_send_sat', 'paying over Lightning'], ['claimable_lightning_receive_sat', 'received over Lightning']]) {
+    if (a[k]) bits.push(`${group(a[k])} ${label}`);
+  }
+  bits.push(`${group(r.onchain.total_sat)} on-chain`);
+  split.textContent = bits.join(' · ');
+}
+
+// --- bitcoin ------------------------------------------------------------------------------
+let btcInfo = null;
+function btcShow(el, out, okText, context) { show(el, out, okText, `bitcoin ${context}`); }
+function srcKind() { return document.querySelector('input[name=bt-src]:checked').value; }
+for (const r of document.querySelectorAll('input[name=bt-src]')) {
+  r.addEventListener('change', () => { $('bt-core').hidden = srcKind() !== 'bitcoind'; $('bt-esplora').hidden = srcKind() !== 'esplora'; });
+}
+for (const r of document.querySelectorAll('input[name=bt-send-kind]')) {
+  r.addEventListener('change', () => {
+    const ln = document.querySelector('input[name=bt-send-kind]:checked').value === 'ln';
+    $('bt-send-ark-f').hidden = ln; $('bt-send-ln-f').hidden = !ln;
+  });
+}
+loaders.bitcoin = async () => {
+  await refreshState();
+  const b = state.bitcoin;
+  $('bt-none').hidden = b.wallet; $('bt-has').hidden = !b.wallet;
+  if (!b.wallet) {
+    const st = b.settings;
+    $('bt-net').value = st.network || 'testnet4';
+    if (!$('bt-ark').value) {
+      // The operator may name a Bitcoin ark of its own: offered, not imposed.
+      let ark = st.ark;
+      if (!ark && state.joined) { const i = await run('info'); if (i.ok) ark = (((i.result.server_info || {}).lightning || {}).bitcoin || {}).ark || ''; }
+      $('bt-ark').value = ark || '';
+    }
+    if (!$('bt-core-url').value) $('bt-core-url').value = st.bitcoind || '';
+    if (!$('bt-core-cookie').value) $('bt-core-cookie').value = st.cookie || '';
+    $('bt-core-user').value = st.user || ''; $('bt-esplora-url').value = st.esplora || '';
+    for (const r of document.querySelectorAll('input[name=bt-src]')) r.checked = r.value === (st.source || 'bitcoind');
+    $('bt-core').hidden = srcKind() !== 'bitcoind'; $('bt-esplora').hidden = srcKind() !== 'esplora';
+    return;
+  }
+  await btcSummaryLoad();
+  await btcVtxos();
+  renderClaim(b.claim);
+};
+async function btcSummaryLoad() {
+  reading($('bt-sum'));
+  const [sum, info] = await Promise.all([arca.btcSummary(), btcInfo ? Promise.resolve({ ok: true, result: btcInfo }) : arca.btc('ark_info')]);
+  const el = clear($('bt-sum'));
+  if (info.ok) btcInfo = info.result;
+  if (!sum.ok) return el.append(refusalEl(sum.refusal, 'bitcoin balance'));
+  const r = sum.result; const a = r.ark; const o = r.onchain;
+  el.append(kv([
+    ['Total', h('b', { 'data-testid': 'btc-total' }, `${group(r.total)} sat`)],
+    ['In the ark, spendable', h('span', { 'data-testid': 'btc-spendable' }, `${group(a.spendable_sat)} sat`)],
+    ['Pending', `${group(a.pending_in_round_sat)} in a round · ${group(a.pending_board_sat)} boarding · ${group(a.pending_exit_sat)} exiting · ${group(a.pending_lightning_send_sat)} paying · ${group(a.claimable_lightning_receive_sat)} received`],
+    ['On-chain', h('span', { 'data-testid': 'btc-onchain' }, `${group(o.total_sat)} sat (${group(o.confirmed_sat)} confirmed)`)],
+    ['Network', btcInfo ? btcInfo.network : '—'],
+    ['The ark\'s server', btcInfo ? h('code', {}, btcInfo.server_pubkey) : '—'],
+    ['Rounds', btcInfo ? `every ${btcInfo.round_interval}; leaves live ${btcInfo.vtxo_lifetime} blocks; an exit waits ${btcInfo.vtxo_exit_delta} blocks` : '—'],
+  ]));
+}
+async function btcVtxos() {
+  const out = await arca.btc('vtxos');
+  const el = clear($('bt-vtxos'));
+  if (!out.ok) return el.append(refusalEl(out.refusal, 'leaves'));
+  const list = Array.isArray(out.result) ? out.result : [];
+  if (!list.length) return el.append(h('p', { class: 'hint' }, 'No leaf in the ark.'));
+  el.append(table(['Leaf', 'Amount', 'Expires at height', 'State'], list.map((v) => [
+    h('code', { title: v.id }, String(v.id).slice(0, 14) + '…'), `${group(v.amount_sat)} sat`, v.expiry_height,
+    h('span', { 'data-testid': 'btc-vtxo-state' }, (v.state && v.state.type) || '')])));
+}
+$('bt-refresh').addEventListener('click', () => loaders.bitcoin());
+$('bt-create').addEventListener('click', async () => {
+  const a = { network: $('bt-net').value, ark: $('bt-ark').value.trim(), source: srcKind(), bitcoind: $('bt-core-url').value.trim(),
+    cookie: $('bt-core-cookie').value.trim(), user: $('bt-core-user').value.trim(), password: $('bt-core-pass').value,
+    esplora: $('bt-esplora-url').value.trim(), birthday_height: $('bt-birthday').value.trim() || null };
+  pending($('bt-create-msg'), 'Making the Bitcoin ark wallet from this wallet\'s mnemonic and joining the ark…');
+  $('bt-create').disabled = true;
+  const out = await arca.btc('create', a);
+  $('bt-create').disabled = false;
+  if (!out.ok) return btcShow($('bt-create-msg'), out, null, 'create');
+  const r = out.result;
+  btcShow($('bt-create-msg'), out, `Joined the Bitcoin ark on ${r.network}, scanning Bitcoin from height ${r.birthday_height == null ? 'its start' : group(r.birthday_height)}.`, 'create');
+  $('bt-create-msg').append(h('div', { class: 'note' }, r.note || ''), jsonBlock(r));
+  setTimeout(() => loaders.bitcoin(), 1500);
+});
+$('bt-oaddr').addEventListener('click', async () => {
+  const out = await arca.btc('onchain_address');
+  const el = clear($('bt-oaddr-out'));
+  if (!out.ok) return el.append(refusalEl(out.refusal, 'address'));
+  const a = out.result.address || out.result;
+  el.append(h('code', { 'data-testid': 'btc-onchain-address-text' }, a), h('button', { class: 'ghost small', onclick: () => arca.copy(a) }, 'Copy'));
+});
+let btcBoard = null;
+$('bt-board-go').addEventListener('click', async () => {
+  $('bt-board-quote').hidden = true; btcBoard = null;
+  const amount = $('bt-board-amt').value.trim();
+  if (!btcInfo) { const i = await arca.btc('ark_info'); if (i.ok) btcInfo = i.result; }
+  const f = btcInfo && btcInfo.fees && btcInfo.fees.board;
+  if (!/^[0-9]+$/.test(amount)) return btcShow($('bt-board-msg'), { ok: false, refusal: { kind: 'input', message: 'the amount is not valid' } }, null, 'board');
+  const fee = f ? Math.max(f.min_fee_sat || 0, (f.base_fee_sat || 0) + Math.ceil(Number(amount) * (f.ppm || 0) / 1e6)) : null;
+  clear($('bt-board-msg'));
+  btcBoard = { amount };
+  clear($('bt-board-quote-body')).append(kv([
+    ['Boards', `${group(amount)} sat`],
+    ['The server\'s fee', h('b', { 'data-testid': 'btc-board-fee' }, fee == null ? 'not published' : `${group(fee)} sat`)],
+    ['Its schedule', f ? `the larger of ${group(f.min_fee_sat)} sat and ${group(f.base_fee_sat)} sat + ${f.ppm} ppm` : '—'],
+  ]), h('p', { class: 'hint' }, 'The board transaction\'s miner fee comes on top, at the fee rate the chain source gives. The leaf is spendable once the board has the confirmations the server asks for.'));
+  $('bt-board-quote').hidden = false;
+});
+$('bt-board-cancel').addEventListener('click', () => { $('bt-board-quote').hidden = true; btcBoard = null; });
+$('bt-board-sign').addEventListener('click', async () => {
+  if (!btcBoard) return;
+  $('bt-board-quote').hidden = true;
+  pending($('bt-board-msg'), 'Signing and broadcasting the board…');
+  const out = await arca.btc('board', btcBoard);
+  btcBoard = null;
+  btcShow($('bt-board-msg'), out, out.ok ? `Boarded ${group(out.result.amount_sat)} sat: ${(out.result.funding_tx && out.result.funding_tx.txid) || ''}` : null, 'board');
+  if (out.ok) $('bt-board-msg').append(jsonBlock(out.result));
+});
+$('bt-send-go').addEventListener('click', async () => {
+  const ln = document.querySelector('input[name=bt-send-kind]:checked').value === 'ln';
+  pending($('bt-send-msg'), ln ? 'Paying through the ark\'s Lightning gateway…' : 'Sending in the ark…');
+  if (ln) {
+    const out = await arca.btc('ln_pay', { invoice: $('bt-send-inv').value.trim() });
+    const p = out.ok ? out.result.payment || {} : {};
+    btcShow($('bt-send-msg'), out, out.ok ? `Lightning payment ${p.state || 'sent'}${p.preimage ? `, preimage ${p.preimage}` : ''}.` : null, 'Lightning payment');
+    if (out.ok) $('bt-send-msg').append(h('div', { class: 'note', 'data-testid': 'btc-ln-state' }, p.state || ''), jsonBlock(out.result));
+  } else {
+    const out = await arca.btc('send', { destination: $('bt-send-dest').value.trim(), amount: $('bt-send-amt').value.trim() });
+    btcShow($('bt-send-msg'), out, out.ok ? `Sent ${group($('bt-send-amt').value.trim())} sat.` : null, 'send');
+    if (out.ok) $('bt-send-msg').append(jsonBlock(out.result));
+  }
+});
+$('bt-addr').addEventListener('click', async () => {
+  const out = await arca.btc('address');
+  const el = clear($('bt-addr-out'));
+  if (!out.ok) return el.append(refusalEl(out.refusal, 'address'));
+  const a = typeof out.result === 'string' ? out.result : out.result.address;
+  el.append(h('code', { 'data-testid': 'btc-ark-address-text' }, a), h('button', { class: 'ghost small', onclick: () => arca.copy(a) }, 'Copy'));
+});
+$('bt-recv-go').addEventListener('click', async () => {
+  pending($('bt-recv-msg'), 'Asking the ark\'s server for an invoice…');
+  const out = await arca.btcReceive({ amount: $('bt-recv-amt').value.trim(), description: $('bt-recv-desc').value.trim() || null });
+  if (!out.ok) return btcShow($('bt-recv-msg'), out, null, 'receive');
+  btcShow($('bt-recv-msg'), out, `An invoice for ${group(out.result.amount_sat)} sat. The app claims the payment the moment it arrives: keep it open while the payer pays.`, 'receive');
+  await refreshState();
+  renderClaim(state.bitcoin.claim);
+});
+$('bt-claim-copy').addEventListener('click', () => arca.copy($('bt-claim-inv').textContent));
+$('bt-claim-stop').addEventListener('click', async () => { await arca.btcClaimStop(); });
+$('bt-claim-again').addEventListener('click', async () => {
+  const inv = $('bt-claim-inv').textContent.trim();
+  if (inv) await arca.btcClaim({ invoice: inv });
+  await refreshState(); renderClaim(state.bitcoin.claim);
+});
+function renderClaim(c) {
+  if (!c) { $('bt-claim').hidden = true; return; }
+  $('bt-claim').hidden = false;
+  $('bt-claim-inv').textContent = c.invoice;
+  const words = { waiting: 'Waiting for the payment, ready to claim it at once.', claimed: 'Received: the payment is claimed and in the ark.',
+    stopped: 'Not waiting. A payment that comes now goes back to the payer: claim now while the payer pays.', refused: 'The claim was refused.' };
+  $('bt-claim-state').textContent = words[c.state] || c.state;
+  $('bt-claim-state').dataset.state = c.state;
+  const log = clear($('bt-claim-log'));
+  for (const x of c.history || []) {
+    if (x.state === 'reissued') log.append(h('div', { class: 'warnline', 'data-testid': 'btc-reissued' }, `${new Date(x.at).toLocaleTimeString()} · A fresh invoice: ${x.why}`));
+    else if (x.state === 'refused') log.append(refusalEl(x.refusal, 'claim'));
+    else if (x.note) log.append(h('div', { class: 'note' }, `${new Date(x.at).toLocaleTimeString()} · ${x.note}`));
+  }
+}
+arca.onBtcEvent(async () => {
+  await refreshState();
+  renderClaim(state.bitcoin.claim);
+  if (document.body.dataset.view === 'bitcoin') btcSummaryLoad();
+});
+$('bt-refresh-go').addEventListener('click', async () => {
+  pending($('bt-refresh-msg'), 'Asking the server\'s next round for new leaves…');
+  const out = await arca.btc('refresh');
+  btcShow($('bt-refresh-msg'), out, 'Handed to the next round: the new leaves are spendable once it is signed.', 'refresh');
+  if (out.ok) $('bt-refresh-msg').append(jsonBlock(out.result));
+  btcVtxos();
+});
+async function exitList() {
+  const out = await arca.btc('exit_list');
+  const el = clear($('bt-exit-list'));
+  if (!out.ok) return el.append(refusalEl(out.refusal, 'exits'));
+  const list = Array.isArray(out.result) ? out.result : [];
+  if (!list.length) return el.append(h('p', { class: 'hint' }, 'No exit under way.'));
+  el.append(table(['Leaf', 'State', 'Claimable from'], list.map((x) => [h('code', {}, String(x.vtxo_id || x.id || '').slice(0, 14) + '…'),
+    h('span', { 'data-testid': 'btc-exit-state' }, (x.state && x.state.type) || ''), (x.state && (x.state.claimable_height || x.state.height)) || '—'])));
+}
+$('bt-exit-est').addEventListener('click', async () => {
+  pending($('bt-exit-msg'), 'Estimating the exit\'s on-chain fees…');
+  const out = await arca.btc('exit_estimate');
+  btcShow($('bt-exit-msg'), out, 'The exit\'s fees, before anything is broadcast:', 'exit fee');
+  if (out.ok) $('bt-exit-msg').append(h('pre', { 'data-testid': 'btc-exit-fee' }, JSON.stringify(out.result, null, 2)));
+});
+$('bt-exit-start').addEventListener('click', async () => {
+  pending($('bt-exit-msg'), 'Starting the exit of every leaf…');
+  const out = await arca.btc('exit_start');
+  btcShow($('bt-exit-msg'), out, 'The exit is under way: move it on as blocks come, then claim.', 'exit');
+  exitList();
+});
+$('bt-exit-prog').addEventListener('click', async () => {
+  pending($('bt-exit-msg'), 'Broadcasting what the chain allows now…');
+  const out = await arca.btc('exit_progress');
+  btcShow($('bt-exit-msg'), out, 'Moved on as far as the chain allows.', 'exit');
+  if (out.ok && out.result) $('bt-exit-msg').append(jsonBlock(out.result));
+  exitList();
+});
+$('bt-exit-claim').addEventListener('click', async () => {
+  pending($('bt-exit-msg'), 'Claiming every exited leaf to the on-chain wallet…');
+  const a = await arca.btc('onchain_address');
+  if (!a.ok) return btcShow($('bt-exit-msg'), a, null, 'exit claim');
+  const out = await arca.btc('exit_claim', { address: a.result.address || a.result });
+  btcShow($('bt-exit-msg'), out, `Claimed to ${a.result.address || a.result}.`, 'exit claim');
+  if (out.ok && out.result) $('bt-exit-msg').append(jsonBlock(out.result));
+  exitList();
+});
 
 // --- board -----------------------------------------------------------------------------
 $('b-addr').addEventListener('click', async () => {

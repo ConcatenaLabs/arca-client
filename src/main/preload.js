@@ -22,4 +22,12 @@ contextBridge.exposeInMainWorld('arca', {
   logs: () => ipcRenderer.invoke('logs'),
   onSyncEvent: (fn) => ipcRenderer.on('sync-event', (_e, ev) => fn(ev)),
   onLog: (fn) => ipcRenderer.on('log', (_e, l) => fn(l)),
+  // The Bitcoin side: Bark's wallet for Bitcoin arks, made from this wallet's
+  // mnemonic, run through the arca client on a queue of its own.
+  btc: (command, args) => ipcRenderer.invoke('btc', command, args || {}),
+  btcSummary: () => ipcRenderer.invoke('btc-summary'),
+  btcReceive: (args) => ipcRenderer.invoke('btc-receive', args || {}),
+  btcClaim: (args) => ipcRenderer.invoke('btc-claim', args || {}),
+  btcClaimStop: () => ipcRenderer.invoke('btc-claim-stop'),
+  onBtcEvent: (fn) => ipcRenderer.on('btc-event', (_e, ev) => fn(ev)),
 });

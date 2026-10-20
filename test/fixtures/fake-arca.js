@@ -32,6 +32,7 @@ switch (cmd) {
   case 'hang': sleep(60000); return answer({});
   case 'crash': process.stderr.write('thread main panicked at somewhere\n'); process.exit(101); break;
   case 'fds': return answer({ fds: fs.readdirSync('/proc/self/fd').map((n) => { try { return fs.readlinkSync(`/proc/self/fd/${n}`); } catch { return null; } }) });
+  case 'note': process.stderr.write('arca: a note on standard error\n'); return answer({ noted: true });
   case 'schedule': return answer({ now: 100, due: process.env.FAKE_DUE === '1', next_sync_at: 200, coins: [] });
   case 'sync': return answer({ schedule: { now: 100, due: false, next_sync_at: 300, coins: [] } });
   case 'board': return refuse('refused', `refused: a board of ${rest[2]} is below the server's smallest leaf in asset ${rest[1]}, 1000`);

@@ -7,7 +7,8 @@ const X = '75'.repeat(32);
 const L = 'ab'.repeat(32);
 
 test('each wallet command becomes the arguments of arca', () => {
-  assert.deepStrictEqual(argv('balance'), ['balance']);
+  // The Bitcoin side is read on its own queue: balance runs no Bark.
+  assert.deepStrictEqual(argv('balance'), ['balance', '--without-bitcoin']);
   assert.deepStrictEqual(argv('board_quote', { asset: X, amount: '2000000' }), ['board', X, '2000000', '--quote']);
   const fee = { asset: X, amount: '30' };
   assert.deepStrictEqual(argv('board', { asset: X, amount: 5, fee_asset: X, shown: fee }), ['board', X, '5', '--fee-asset', X, '--shown', JSON.stringify(fee)]);

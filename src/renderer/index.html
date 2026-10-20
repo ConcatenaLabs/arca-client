@@ -17,6 +17,7 @@
     </div>
     <nav id="nav">
       <button class="nav" data-view="wallet">Wallet</button>
+      <button class="nav" data-view="bitcoin">Bitcoin</button>
       <button class="nav" data-view="board">Board</button>
       <button class="nav" data-view="send">Send</button>
       <button class="nav" data-view="receive">Receive</button>
@@ -95,6 +96,101 @@
       </div>
       <div id="w-rows" class="rows" data-testid="balance-rows"></div>
       <div id="w-msg" class="msg"></div>
+    </section>
+
+    <!-- BITCOIN -->
+    <section class="view" data-view="bitcoin">
+      <header class="vhead"><h1>Bitcoin</h1><div><button class="ghost" id="bt-refresh" data-testid="btc-refresh">Refresh</button></div></header>
+      <p class="lead">Native BTC on Bitcoin itself, in a Bitcoin ark: Bark's wallet, made from this wallet's own mnemonic, joined to a Bark server of your choice. BTC is never a Sequentia coin here.</p>
+      <div id="bt-none" class="panel" hidden data-testid="btc-join">
+        <h2 class="sub">Join a Bitcoin ark</h2>
+        <p class="hint">The Bitcoin ark wallet is made from this wallet's mnemonic, so writing the mnemonic down keeps both sides. Restoring a mnemonic restores both.</p>
+        <div class="grid2">
+          <label>Network<select id="bt-net" data-testid="btc-network">
+            <option value="testnet4">testnet4 (the network the Sequentia testnet anchors to)</option>
+            <option value="mainnet">mainnet</option><option value="signet">signet</option><option value="mutinynet">mutinynet</option><option value="regtest">regtest</option>
+          </select></label>
+          <label>The ark's server<input id="bt-ark" data-testid="btc-ark" placeholder="https://ark.example.org"></label>
+        </div>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="bt-src" value="bitcoind" checked data-testid="btc-src-bitcoind"> Your Bitcoin Core node (version 29 or later, with -txindex)</label>
+          <label><input type="radio" name="bt-src" value="esplora" data-testid="btc-src-esplora"> An Esplora server</label>
+        </div>
+        <div class="grid2" id="bt-core">
+          <label>RPC address<input id="bt-core-url" data-testid="btc-core-url" placeholder="http://127.0.0.1:48332/"></label>
+          <label>Cookie file (or leave empty and give a user)<input id="bt-core-cookie" data-testid="btc-core-cookie" placeholder="/path/to/testnet4/.cookie"></label>
+          <label>RPC user<input id="bt-core-user" autocomplete="off"></label>
+          <label>RPC password<input id="bt-core-pass" type="password" autocomplete="off"></label>
+        </div>
+        <div class="grid2" id="bt-esplora" hidden>
+          <label>Esplora address<input id="bt-esplora-url" data-testid="btc-esplora-url" placeholder="https://esplora.example.org/testnet4/api"></label>
+        </div>
+        <label>Scan Bitcoin from height (only when restoring a mnemonic that held bitcoin; empty: from now)<input id="bt-birthday" data-testid="btc-birthday" inputmode="numeric"></label>
+        <div class="row"><button id="bt-create" class="primary" data-testid="btc-create">Create the Bitcoin ark wallet</button></div>
+        <div id="bt-create-msg" class="msg" data-testid="btc-create-msg"></div>
+      </div>
+      <div id="bt-has" hidden>
+        <div class="panel">
+          <h2 class="sub">Holdings</h2>
+          <div id="bt-sum" data-testid="btc-summary"></div>
+          <div id="bt-sum-msg" class="msg"></div>
+        </div>
+        <div class="panel">
+          <h2 class="sub">Board · on-chain BTC into the ark</h2>
+          <div class="row"><button id="bt-oaddr" class="ghost" data-testid="btc-onchain-address">New on-chain address</button></div>
+          <div id="bt-oaddr-out" class="request" data-testid="btc-onchain-address-out"></div>
+          <div class="grid2"><label>Amount (sat)<input id="bt-board-amt" data-testid="btc-board-amount" inputmode="numeric"></label></div>
+          <div class="row"><button id="bt-board-go" class="primary" data-testid="btc-board-go">Show the fee</button></div>
+          <div id="bt-board-quote" hidden data-testid="btc-board-quote"><div id="bt-board-quote-body"></div>
+            <div class="row"><button id="bt-board-sign" class="primary" data-testid="btc-board-sign">Board</button> <button id="bt-board-cancel" class="ghost">Cancel</button></div></div>
+          <div id="bt-board-msg" class="msg" data-testid="btc-board-msg"></div>
+        </div>
+        <div class="panel">
+          <h2 class="sub">Send</h2>
+          <div class="seg" role="radiogroup">
+            <label><input type="radio" name="bt-send-kind" value="ark" checked data-testid="btc-send-ark"> To an Ark or Bitcoin address</label>
+            <label><input type="radio" name="bt-send-kind" value="ln" data-testid="btc-send-ln"> A Lightning invoice</label>
+          </div>
+          <div id="bt-send-ark-f" class="grid2">
+            <label>Address<input id="bt-send-dest" data-testid="btc-send-dest" placeholder="tark1… or tb1…"></label>
+            <label>Amount (sat)<input id="bt-send-amt" data-testid="btc-send-amount" inputmode="numeric"></label>
+          </div>
+          <div id="bt-send-ln-f" hidden><label>Invoice<textarea id="bt-send-inv" rows="3" data-testid="btc-send-invoice" placeholder="lntb…"></textarea></label></div>
+          <div class="row"><button id="bt-send-go" class="primary" data-testid="btc-send-go">Send</button></div>
+          <div id="bt-send-msg" class="msg" data-testid="btc-send-msg"></div>
+        </div>
+        <div class="panel">
+          <h2 class="sub">Receive</h2>
+          <div class="row"><button id="bt-addr" class="ghost" data-testid="btc-ark-address">Ark address</button></div>
+          <div id="bt-addr-out" class="request" data-testid="btc-ark-address-out"></div>
+          <div class="grid2">
+            <label>Over Lightning: amount (sat)<input id="bt-recv-amt" data-testid="btc-recv-amount" inputmode="numeric"></label>
+            <label>Description (optional)<input id="bt-recv-desc" data-testid="btc-recv-desc"></label>
+          </div>
+          <div class="row"><button id="bt-recv-go" class="primary" data-testid="btc-recv-go">Make an invoice</button></div>
+          <div id="bt-recv-msg" class="msg" data-testid="btc-recv-msg"></div>
+          <div id="bt-claim" hidden data-testid="btc-claim">
+            <div id="bt-claim-inv" class="request" data-testid="btc-invoice"></div>
+            <div class="row"><button id="bt-claim-copy" class="ghost">Copy</button> <button id="bt-claim-stop" class="ghost" data-testid="btc-claim-stop">Stop waiting</button> <button id="bt-claim-again" class="ghost" data-testid="btc-claim-again">Claim now</button></div>
+            <div id="bt-claim-state" class="note" data-testid="btc-claim-state"></div>
+            <div id="bt-claim-log" data-testid="btc-claim-log"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2 class="sub">Leaves and refresh</h2>
+          <p class="hint">Each leaf in the ark expires; a refresh replaces leaves with new ones from the server's next round, at its refresh fee. The app has Bark refresh leaves near expiry on its own every half hour while it runs.</p>
+          <div class="row"><button id="bt-refresh-go" class="ghost" data-testid="btc-refresh-all">Refresh every leaf</button></div>
+          <div id="bt-refresh-msg" class="msg" data-testid="btc-refresh-msg"></div>
+          <div id="bt-vtxos" data-testid="btc-vtxos"></div>
+        </div>
+        <div class="panel">
+          <h2 class="sub">Exit · take every leaf to the chain alone</h2>
+          <p class="hint">An exit needs nothing of the ark's server: the leaves' transactions go on the chain, then, after the exit delta, a claim brings the BTC to the on-chain wallet. Each step waits for blocks.</p>
+          <div class="row"><button id="bt-exit-est" class="ghost" data-testid="btc-exit-estimate">Show the fee</button> <button id="bt-exit-start" class="primary" data-testid="btc-exit-start">Start the exit</button> <button id="bt-exit-prog" class="ghost" data-testid="btc-exit-progress">Move it on</button> <button id="bt-exit-claim" class="ghost" data-testid="btc-exit-claim">Claim to the on-chain wallet</button></div>
+          <div id="bt-exit-msg" class="msg" data-testid="btc-exit-msg"></div>
+          <div id="bt-exit-list" data-testid="btc-exit-list"></div>
+        </div>
+      </div>
     </section>
 
     <!-- BOARD -->

@@ -5,7 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const { ArcaRunner } = require('./arca');
 const { SyncScheduler } = require('./scheduler');
-const { rails } = require('./rails');
+const { rails, barkBeside } = require('./rails');
+const { btcArgv, btcTotal } = require('./bitcoin');
 const { nodeRpc, checkNode } = require('./node-rpc');
 const { loadConfig, saveConfig, defaultConfig } = require('./config');
 const { argv } = require('./commands');
@@ -37,6 +38,25 @@ function bundledVersion() {
   return null;
 }
 
+// Bark's client and daemon, which arca runs for the Bitcoin side: a release
+// carries them beside arca, under <resources>/arca/bin; `npm start` in a
+// checkout uses the ones build/make-bark-bundle.sh staged.
+function bundledBark() {
+  const exe = process.platform === 'win32' ? 'bark.exe' : 'bark';
+  const cands = [
+    path.join(process.resourcesPath || '', 'arca', 'bin', exe),
+    path.join(__dirname, '..', '..', 'build', `bark-${process.platform === 'win32' ? 'win' : 'linux'}-x64`, 'bin', exe),
+  ];
+  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch { /* next */ } }
+  return null;
+}
+function bundledBarkVersion() {
+  for (const c of [path.join(process.resourcesPath || '', 'arca', 'BARK_VERSION'), path.join(__dirname, '..', '..', 'build', 'bark-linux-x64', 'VERSION')]) {
+    try { return fs.readFileSync(c, 'utf8').trim(); } catch { /* next */ }
+  }
+  return null;
+}
+
 let config = null;
 function cfg() {
   if (!config) config = loadConfig(app.getPath('userData'), defaultConfig(homeDir()));
@@ -49,17 +69,36 @@ function save() { saveConfig(app.getPath('userData'), cfg()); }
 // runs from the command line.
 function arcaBin() { const c = cfg(); return c.mode === 'attached' && c.attached.bin ? c.attached.bin : bundledArca(); }
 function datadir() { const c = cfg(); return c.mode === 'attached' && c.attached.datadir ? c.attached.datadir : c.datadir; }
+// Bark: beside an attached arca when one is there, else the one the app carries.
+function barkBin() {
+  const c = cfg();
+  if (c.mode === 'attached' && c.attached.bin) { const b = barkBeside(c.attached.bin); if (b && fs.existsSync(b)) return b; }
+  return bundledBark();
+}
+// What every run of arca is told of Bark.
+function barkEnv() {
+  const b = barkBin();
+  if (!b) return {};
+  return { ARCA_BARK_EXEC: b, ARCA_BARKD_EXEC: path.join(path.dirname(b), process.platform === 'win32' ? 'barkd.exe' : 'barkd') };
+}
+function btcWallet() { try { return fs.existsSync(path.join(datadir(), 'bitcoin', 'mnemonic')); } catch { return false; } }
 
 let runner = null;
 let scheduler = null;
+// The Bitcoin side's own queue: Bark lets one process at a time open its
+// wallet, and a claim holds it while a payer pays.
+let btcRunner = null;
+let btcTimer = null;
 let win = null;
 function send(channel, payload) { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); }
 
 function makeRunner() {
   const old = scheduler;
   if (old) old.stop();
+  stopClaim('the wallet changed');
+  if (btcTimer) clearInterval(btcTimer);
   runner = new ArcaRunner({
-    bin: arcaBin(), datadir: datadir(),
+    bin: arcaBin(), datadir: datadir(), env: barkEnv(),
     witnessPatience: process.env.ARCA_CLIENT_WITNESS_PATIENCE ? Number(process.env.ARCA_CLIENT_WITNESS_PATIENCE) : null,
     onLog: (l) => send('log', l),
   });
@@ -68,6 +107,73 @@ function makeRunner() {
     onEvent: (e) => send('sync-event', e),
   });
   if (cfg().autoSync && runner.exists()) scheduler.start();
+  btcRunner = new ArcaRunner({
+    bin: arcaBin(), datadir: datadir(), env: barkEnv(),
+    deadlines: { default: 180000, bitcoin: 300000 },
+    onLog: (l) => send('log', `[bitcoin] ${l}`),
+  });
+  // Bark refreshes leaves before they expire when it is told to maintain the
+  // wallet: at the start and every half hour while the app runs.
+  const maintain = () => { if (btcWallet() && !claim) btcCall('maintain').catch(() => {}); };
+  setTimeout(maintain, 5000).unref();
+  btcTimer = setInterval(maintain, Number(process.env.ARCA_CLIENT_BITCOIN_MAINTAIN_MS || 0) || 1800000);
+  btcTimer.unref();
+}
+
+// One Bitcoin command on its queue: Bark's answer, or its refusal verbatim.
+async function btcCall(command, a = {}, extra = {}) {
+  let args;
+  try { args = btcArgv(command, a); } catch (e) { return { ok: false, refusal: { kind: 'input', message: e.message }, notes: [] }; }
+  const bark = args[0] === 'bitcoin' && args[1] === '--quiet';
+  const deadlineMs = command === 'create' ? 900000 : command === 'ln_claim' ? (Number(a.wait || 25) + 60) * 1000
+    : ['exit_progress', 'exit_start', 'refresh', 'board', 'send', 'ln_pay'].includes(command) ? 600000 : 180000;
+  try {
+    const { result, notes } = await btcRunner.run(args, Object.assign({ bark, deadlineMs }, extra));
+    return { ok: true, result, notes };
+  } catch (e) {
+    return { ok: false, refusal: e.refusal || { kind: 'client', message: e.message }, notes: e.notes || [] };
+  }
+}
+
+// The claim of a payment over Lightning, run for the user while the invoice
+// is shown: Bark's server holds a payment only until the wallet claims it.
+// Slices of 25 seconds, so other Bitcoin commands get Bark's wallet between
+// them. When the payment can no longer be claimed, the wallet answers a
+// fresh invoice (`reissued`), shown in place of the old one, and the claim
+// goes on with it.
+let claim = null; // {invoice, amount, since, state, history[], stop}
+const CLAIM_FOR_MS = Number(process.env.ARCA_CLIENT_CLAIM_FOR_MS || 0) || 3600000;
+function claimState() { return claim ? { invoice: claim.invoice, amount: claim.amount, since: claim.since, state: claim.state, history: claim.history } : null; }
+function stopClaim(why) { if (claim && claim.state === 'waiting') { claim.stop = why; } }
+async function runClaim(c) {
+  while (!c.stop) {
+    if (Date.now() - c.since > CLAIM_FOR_MS) { c.state = 'stopped'; c.history.push({ at: Date.now(), state: 'stopped', note: 'no payment came within the hour: claim again to wait more' }); break; }
+    const out = await btcCall('ln_claim', { invoice: c.invoice, wait: 25 });
+    if (c.stop) break;
+    if (!out.ok) {
+      c.state = 'refused'; c.history.push({ at: Date.now(), state: 'refused', refusal: out.refusal });
+      send('btc-event', { type: 'claim-refused', invoice: c.invoice, refusal: out.refusal });
+      break;
+    }
+    const r = out.result;
+    if (r.state === 'claimed') {
+      c.state = 'claimed'; c.history.push({ at: Date.now(), state: 'claimed', receive: r.receive });
+      send('btc-event', { type: 'claimed', invoice: c.invoice, receive: r.receive });
+      break;
+    }
+    if (r.state === 'reissued') {
+      c.history.push({ at: Date.now(), state: 'reissued', replaces: c.invoice, invoice: r.invoice, why: r.why });
+      send('btc-event', { type: 'reissued', replaces: c.invoice, invoice: r.invoice, why: r.why });
+      c.invoice = r.invoice;
+    }
+  }
+  if (c.stop && c.state === 'waiting') { c.state = 'stopped'; c.history.push({ at: Date.now(), state: 'stopped', note: c.stop }); }
+  send('btc-event', { type: 'claim-ended', claim: claimState() });
+}
+function startClaim(invoice, amount) {
+  stopClaim('a new claim started');
+  claim = { invoice, amount, since: Date.now(), state: 'waiting', history: [], stop: null };
+  runClaim(claim).catch((e) => { if (claim) { claim.state = 'refused'; claim.history.push({ at: Date.now(), state: 'refused', refusal: { kind: 'client', message: e.message } }); } });
 }
 
 // Every call the renderer makes to the wallet goes through here: the answer,
@@ -89,7 +195,11 @@ ipcMain.handle('state', () => {
     node: Object.assign({}, c.node, { password: c.node.password ? '••••' : '' }),
     operator: c.operator, autoSync: c.autoSync, backedUp: c.backedUp,
     arca: { bin: arcaBin(), bundled: !!bundledArca(), version: c.mode === 'attached' ? null : bundledVersion() },
-    rails: rails(arcaBin()), runner: runner.status(), sync: scheduler.status(),
+    rails: rails(arcaBin(), barkBin()), runner: runner.status(), sync: scheduler.status(),
+    bitcoin: {
+      wallet: btcWallet(), settings: Object.assign({}, c.bitcoin, { password: c.bitcoin.password ? '••••' : '' }),
+      bark: barkBin(), version: c.mode === 'attached' ? null : bundledBarkVersion(), runner: btcRunner.status(), claim: claimState(),
+    },
     platform: process.platform, appVersion: app.getVersion(),
   };
 });
@@ -104,6 +214,43 @@ ipcMain.handle('arca', async (_e, command, a) => {
   return out;
 });
 ipcMain.handle('sync-now', async () => scheduler.syncNow('asked for'));
+
+// --- the Bitcoin side ---------------------------------------------------------------
+ipcMain.handle('btc', async (_e, command, a) => {
+  if (command === 'create') {
+    const c = cfg();
+    const b = Object.assign({}, c.bitcoin, a || {});
+    if (b.password === '••••') b.password = c.bitcoin.password;
+    c.bitcoin = { network: b.network, ark: String(b.ark || '').trim(), source: b.source === 'esplora' ? 'esplora' : 'bitcoind',
+      bitcoind: String(b.bitcoind || '').trim(), cookie: String(b.cookie || '').trim(), user: String(b.user || '').trim(),
+      password: String(b.password || ''), esplora: String(b.esplora || '').trim() };
+    save();
+    if (!runner.exists()) return { ok: false, refusal: { kind: 'input', message: 'join an operator first: the Bitcoin ark wallet is made from this wallet\'s mnemonic' }, notes: [] };
+    const env = c.bitcoin.source === 'bitcoind' && !c.bitcoin.cookie && c.bitcoin.password ? { ARCA_BITCOIND_PASSWORD: c.bitcoin.password } : {};
+    return btcCall('create', Object.assign({}, c.bitcoin, { birthday_height: a && a.birthday_height }), { env });
+  }
+  return btcCall(command, a || {});
+});
+// What the Bitcoin side holds: Bark's ark balance and its on-chain wallet,
+// and their total in satoshis, as BTC's row counts it.
+ipcMain.handle('btc-summary', async () => {
+  if (!btcWallet()) return { ok: true, result: { wallet: false } };
+  const ark = await btcCall('balance');
+  const onchain = await btcCall('onchain_balance');
+  if (!ark.ok || !onchain.ok) return { ok: false, refusal: (ark.ok ? onchain : ark).refusal, notes: [] };
+  return { ok: true, result: { wallet: true, ark: ark.result, onchain: onchain.result, total: btcTotal(ark.result, onchain.result) } };
+});
+ipcMain.handle('btc-receive', async (_e, a) => {
+  const out = await btcCall('ln_receive', a || {});
+  if (out.ok) startClaim(out.result.invoice, out.result.amount_sat);
+  return out;
+});
+ipcMain.handle('btc-claim', async (_e, a) => {
+  try { btcArgv('ln_claim', { invoice: a && a.invoice }); } catch (e) { return { ok: false, refusal: { kind: 'input', message: e.message } }; }
+  startClaim(String(a.invoice).trim(), a.amount || null);
+  return { ok: true, result: claimState() };
+});
+ipcMain.handle('btc-claim-stop', async () => { stopClaim('stopped by the user'); return { ok: true, result: claimState() }; });
 ipcMain.handle('set-auto-sync', (_e, on) => {
   const c = cfg(); c.autoSync = !!on; save();
   if (c.autoSync && runner.exists()) scheduler.start(); else scheduler.stop();
@@ -202,7 +349,10 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
     e.preventDefault();
     if (scheduler) scheduler.stop();
-    Promise.race([runner ? runner.stop(20000) : Promise.resolve(), new Promise((r) => setTimeout(r, 30000))])
+    stopClaim('the app is stopping');
+    if (btcTimer) clearInterval(btcTimer);
+    Promise.race([Promise.all([runner ? runner.stop(20000) : Promise.resolve(), btcRunner ? btcRunner.stop(40000) : Promise.resolve()]),
+      new Promise((r) => setTimeout(r, 45000))])
       .finally(() => app.exit(0));
   });
   app.on('window-all-closed', () => app.quit());
