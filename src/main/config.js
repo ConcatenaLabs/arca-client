@@ -14,8 +14,11 @@ function defaultConfig(home) {
     datadir: path.join(home, 'sequentia'),
     attached: { bin: '', datadir: '' },
     node: { url: 'http://127.0.0.1:18332/', user: '', password: '', cookie: '' },
-    operator: { url: '', source: 'address' },
+    operator: { url: '', source: 'address', key: '' },
     autoSync: true,
+    // Developer mode shows every rail and the Deploy screen. It is the default
+    // on the testnet.
+    developer: true,
     backedUp: false,
     // The Bitcoin side: the network, the Bitcoin ark joined, and the chain
     // source (a Bitcoin Core node of version 29 or later, or Esplora).

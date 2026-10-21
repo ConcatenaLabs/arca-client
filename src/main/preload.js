@@ -35,4 +35,9 @@ contextBridge.exposeInMainWorld('arca', {
   swap: (command, args) => ipcRenderer.invoke('swap', command, args || {}),
   swapStatus: () => ipcRenderer.invoke('swap-status'),
   onSwapEvent: (fn) => ipcRenderer.on('swap-event', (_e, ev) => fn(ev)),
+  // Deploy (developer mode): an Arca operator and a Bitcoin ark run by the
+  // app, each started, stopped and read through the main process.
+  deployState: () => ipcRenderer.invoke('deploy-state'),
+  deploy: (action, args) => ipcRenderer.invoke('deploy', action, args || {}),
+  setDeveloper: (on) => ipcRenderer.invoke('set-developer', on),
 });

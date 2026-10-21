@@ -91,6 +91,8 @@ for (const b of document.querySelectorAll('.nav')) b.addEventListener('click', (
 async function refreshState() {
   state = await arca.state();
   document.body.classList.toggle('nowallet', !state.joined);
+  // Deploy runs daemons the app carries on Linux alone.
+  document.body.classList.toggle('nodev', state.developer === false || state.platform !== 'linux');
   const r = state.runner.running;
   $('run-label').textContent = r ? `running: arca ${r.command}${state.runner.queued ? ` (+${state.runner.queued})` : ''}` : '';
   renderSyncLabel(state.sync);
@@ -129,10 +131,11 @@ $('j-node-test').addEventListener('click', async () => {
 $('j-join').addEventListener('click', async () => {
   const restore = document.querySelector('input[name=w-src]:checked').value === 'restore';
   await arca.setNode(joinForm());
-  await arca.setOperator({ url: $('j-op-url').value.trim() });
+  await arca.setOperator({ url: $('j-op-url').value.trim(), key: $('j-op-key').value.trim() });
   pending($('j-msg'), restore ? 'Creating the wallet and restoring it from what the operator serves to its mailbox key…' : 'Creating the wallet…');
   $('j-join').disabled = true;
-  const out = await arca.join(restore ? { mnemonic: $('j-mnemonic').value } : {});
+  const operatorKey = $('j-op-key').value.trim();
+  const out = await arca.join(Object.assign(restore ? { mnemonic: $('j-mnemonic').value } : {}, operatorKey ? { operatorKey } : {}));
   $('j-join').disabled = false;
   if (!out.ok) return show($('j-msg'), out, null, 'join');
   show($('j-msg'), out, 'Joined.');
@@ -314,7 +317,8 @@ $('bt-refresh').addEventListener('click', () => loaders.bitcoin());
 $('bt-create').addEventListener('click', async () => {
   const a = { network: $('bt-net').value, ark: $('bt-ark').value.trim(), source: srcKind(), bitcoind: $('bt-core-url').value.trim(),
     cookie: $('bt-core-cookie').value.trim(), user: $('bt-core-user').value.trim(), password: $('bt-core-pass').value,
-    esplora: $('bt-esplora-url').value.trim(), birthday_height: $('bt-birthday').value.trim() || null };
+    esplora: $('bt-esplora-url').value.trim(), birthday_height: $('bt-birthday').value.trim() || null,
+    server_key: $('bt-ark-key').value.trim() || null };
   pending($('bt-create-msg'), 'Making the Bitcoin ark wallet from this wallet\'s mnemonic and joining the ark…');
   $('bt-create').disabled = true;
   const out = await arca.btc('create', a);
@@ -772,7 +776,9 @@ loaders.settings = async () => {
   for (const r of document.querySelectorAll('input[name=st-mode]')) r.checked = r.value === state.mode;
   $('st-bin').value = state.attached.bin || ''; $('st-dir').value = state.attached.datadir || '';
   $('st-log').textContent = (await arca.logs()).slice(-200).join('\n');
+  $('st-developer').checked = state.developer !== false;
 };
+$('st-developer').addEventListener('change', async () => { await arca.setDeveloper($('st-developer').checked); await refreshState(); });
 $('st-node-test').addEventListener('click', async () => {
   pending($('st-node-msg'), 'Asking the node…');
   const out = await arca.testNode();
@@ -895,6 +901,212 @@ function table(head, rows) {
     h('thead', {}, h('tr', {}, ...head.map((x) => h('th', {}, x)))),
     h('tbody', {}, ...rows.map((r) => h('tr', {}, ...r.map((c) => h('td', {}, c)))))));
 }
+
+// --- deploy: an operator and a Bitcoin ark run on this machine ------------------------------------
+let deployState = null;
+let deployTimer = null;
+function assetRow(a) {
+  a = a || {};
+  const rate = a.rate || { source: 'none' };
+  const rateWhere = rate.source === 'file' ? (rate.path || '') : rate.source === 'command' ? (Array.isArray(rate.command) ? rate.command.join(' ') : (rate.command || '')) : '';
+  const sel = h('select', { class: 'a-rate', 'data-testid': 'ds-asset-rate' },
+    ...[['none', 'no rate'], ['node', 'the node\'s rate'], ['file', 'a file'], ['command', 'a command']]
+      .map(([v, t]) => h('option', { value: v, selected: rate.source === v ? true : null }, t)));
+  const row = h('div', { class: 'asset-row', 'data-testid': 'ds-asset-row' },
+    h('label', {}, 'Asset id', h('input', { class: 'a-id', 'data-testid': 'ds-asset-id', list: 'asset-list', value: a.asset || '', placeholder: '64 hex characters' })),
+    h('label', {}, 'Smallest leaf, atoms', h('input', { class: 'a-min', 'data-testid': 'ds-asset-min', value: a.min_leaf || '' })),
+    h('label', {}, 'Refresh ppm', h('input', { class: 'a-rppm', value: a.refresh_ppm == null ? '' : a.refresh_ppm, placeholder: 'as above' })),
+    h('label', {}, 'Offboard ppm', h('input', { class: 'a-oppm', value: a.offboard_ppm == null ? '' : a.offboard_ppm, placeholder: 'as above' })),
+    h('label', {}, 'Rate from', sel),
+    h('label', {}, 'File path or command', h('input', { class: 'a-where', 'data-testid': 'ds-asset-rate-where', value: rateWhere })),
+    h('button', { class: 'ghost small', onclick: (e) => { e.target.closest('.asset-row').remove(); } }, 'Remove'));
+  return row;
+}
+function readAssets() {
+  return [...document.querySelectorAll('#ds-assets .asset-row')].map((r) => {
+    const q = (c) => r.querySelector(c).value.trim();
+    const source = r.querySelector('.a-rate').value;
+    const where = q('.a-where');
+    const rate = source === 'file' ? { source, path: where } : source === 'command' ? { source, command: where.split(/\s+/).filter(Boolean) } : { source };
+    return { asset: q('.a-id'), min_leaf: q('.a-min'), refresh_ppm: q('.a-rppm') === '' ? null : Number(q('.a-rppm')),
+      offboard_ppm: q('.a-oppm') === '' ? null : Number(q('.a-oppm')), rate };
+  }).filter((a) => a.asset || a.min_leaf);
+}
+function numOr(v, d) { const t = String(v).trim(); return t === '' ? d : Number(t); }
+function readDeploy() {
+  return {
+    postgresBin: $('d-pg-bin').value.trim(), pgPort: numOr($('d-pg-port').value, 25432), backupDir: $('d-backup').value.trim(),
+    sequentia: {
+      node: { url: $('ds-node-url').value.trim(), cookie: $('ds-node-cookie').value.trim(), user: $('ds-node-user').value.trim(), password: $('ds-node-pass').value },
+      listen: $('ds-listen').value.trim() || '127.0.0.1:3535', route: $('ds-route').value.trim(),
+      exit_delay_units: [numOr($('ds-delay-min').value, 254), numOr($('ds-delay-max').value, 338)],
+      round_interval_seconds: numOr($('ds-round').value, 60),
+      fees: { refresh_ppm: numOr($('ds-refresh-ppm').value, 0), offboard_ppm: numOr($('ds-offboard-ppm').value, 0), lightning_ppm: numOr($('ds-lightning-ppm').value, 0) },
+      assets: readAssets(),
+    },
+    bitcoin: {
+      network: $('db-net').value,
+      bitcoind: { url: $('db-core-url').value.trim(), cookie: $('db-core-cookie').value.trim(), user: $('db-core-user').value.trim(), password: $('db-core-pass').value },
+      listen: $('db-listen').value.trim() || '127.0.0.1:3545', admin_port: numOr($('db-admin').value, 3546), route: $('db-route').value.trim(),
+      round_interval_seconds: numOr($('db-round').value, 30), vtxo_lifetime: numOr($('db-life').value, 2016), vtxo_exit_delta: numOr($('db-delta').value, 72),
+      required_board_confirmations: numOr($('db-confs').value, 2), min_board_sat: numOr($('db-minboard').value, 10000), max_vtxo_sat: numOr($('db-maxleaf').value, 5000000),
+    },
+  };
+}
+function fillDeploy(st) {
+  const s = st.settings; const q = s.sequentia; const b = s.bitcoin;
+  $('d-pg-bin').value = s.postgresBin || ''; $('d-pg-port').value = s.pgPort; $('d-backup').value = s.backupDir || '';
+  $('ds-node-url').value = q.node.url || ''; $('ds-node-cookie').value = q.node.cookie || ''; $('ds-node-user').value = q.node.user || ''; $('ds-node-pass').value = q.node.password || '';
+  $('ds-listen').value = q.listen; $('ds-route').value = q.route || '';
+  $('ds-delay-min').value = q.exit_delay_units[0]; $('ds-delay-max').value = q.exit_delay_units[1]; $('ds-round').value = q.round_interval_seconds;
+  $('ds-refresh-ppm').value = q.fees.refresh_ppm; $('ds-offboard-ppm').value = q.fees.offboard_ppm; $('ds-lightning-ppm').value = q.fees.lightning_ppm;
+  const list = clear($('ds-assets'));
+  for (const a of q.assets) list.append(assetRow(a));
+  $('db-net').value = b.network; $('db-core-url').value = b.bitcoind.url || ''; $('db-core-cookie').value = b.bitcoind.cookie || '';
+  $('db-core-user').value = b.bitcoind.user || ''; $('db-core-pass').value = b.bitcoind.password || '';
+  $('db-listen').value = b.listen; $('db-admin').value = b.admin_port; $('db-route').value = b.route || ''; $('db-round').value = b.round_interval_seconds;
+  $('db-life').value = b.vtxo_lifetime; $('db-delta').value = b.vtxo_exit_delta; $('db-confs').value = b.required_board_confirmations;
+  $('db-minboard').value = b.min_board_sat; $('db-maxleaf').value = b.max_vtxo_sat;
+}
+function daemonsTable(ds) {
+  return table(['Process', 'State', 'PID', 'Since'], ds.map((d) => [d.name,
+    h('span', { class: `st ${d.running ? 'st-live' : 'st-lost'}`, 'data-testid': `daemon-${d.name}` }, d.running ? 'running' : 'stopped'),
+    d.pid || '—', d.since ? new Date(d.since).toLocaleString() : '—']));
+}
+async function deployCall(action, el, busyText, okText) {
+  if (el) pending(el, busyText || 'Working…');
+  const out = await arca.deploy(action);
+  if (el) show(el, out, typeof okText === 'function' ? (out.ok ? okText(out.result) : null) : okText, `deploy: ${action}`);
+  return out;
+}
+async function saveDeploy(el) {
+  const out = await arca.deploy('save', readDeploy());
+  if (!out.ok && el) show(el, out, null, 'deploy: save');
+  return out.ok;
+}
+async function renderSeqStatus(st) {
+  const s = st.sequentia; const el = clear($('ds-status'));
+  if (!s.exists) { el.append(h('p', { class: 'hint' }, 'No operator yet. Fill in the node, the route and the assets, then make it: its key is drawn here.')); }
+  el.append(daemonsTable(s.daemons));
+  const running = s.daemons.find((d) => d.name === 'arcad').running;
+  const share = clear($('ds-share')); const rec = clear($('ds-record'));
+  if (s.exists) {
+    const route = st.settings.sequentia.route || `http://${st.settings.sequentia.listen}`;
+    share.append(h('div', { class: 'share', 'data-testid': 'ds-share-text' }, `Arca operator on Sequentia\nkey   ${s.state.operator_key}\nroute ${route}`),
+      h('div', { class: 'row' }, h('button', { class: 'ghost small', onclick: () => arca.copy(`${s.state.operator_key} ${route}`) }, 'Copy')),
+      h('p', { class: 'hint' }, 'A wallet joins with this route and checks this key. Publish the key through a channel the wallets trust, apart from the route.'));
+    const r = s.record || {};
+    rec.append(kv([
+      ['Operator key S', h('code', { 'data-testid': 'ds-operator-key' }, s.state.operator_key)],
+      ['Chain (genesis)', h('code', {}, s.state.genesis)],
+      ['Made', new Date(s.state.created_at * 1000).toLocaleString()],
+      ['Key file', h('code', {}, `${s.dir}/secrets/operator.key`)],
+      ['Record', r.exists ? h('code', {}, r.path) : 'none'],
+      ['Entries', r.exists ? h('span', { 'data-testid': 'ds-record-entries' }, group(r.entries)) : '—'],
+      ['Keepers', 'none: an operator for its own coins and for trials'],
+      ['Beside it', r.beside && r.beside.length ? r.beside.join(', ') : '—'],
+    ]));
+  } else share.append(h('p', { class: 'hint' }, '—'));
+  if (running) {
+    const out = await arca.deploy('seq-info');
+    if (out.ok) {
+      const i = out.result;
+      const assets = Array.isArray(i.assets) ? i.assets : [];
+      el.append(h('h2', { class: 'sub' }, 'What it publishes (GET /v1/info)'), kv([
+        ['Operator key', h('code', { 'data-testid': 'ds-info-key' }, i.operator || i.operator_key || '')],
+        ['Exit delays', i.exit_delay_units ? `${i.exit_delay_units.min} to ${i.exit_delay_units.max} units of 512 s` : '—'],
+      ]), table(['Asset', 'Smallest leaf', 'Rate', 'Source'], assets.map((a) => [assetEl(a.asset), group(a.min_leaf),
+        a.rate ? `${a.rate.rate == null ? 'none yet' : group(a.rate.rate)}${a.rate.stale ? ' (stale)' : ''}` : '—', a.rate ? a.rate.source : 'none'])));
+    } else el.append(refusalEl(out.refusal, 'info'));
+  }
+}
+async function renderArkStatus(st) {
+  const b = st.bitcoin; const el = clear($('db-status')); const share = clear($('db-share'));
+  if (!b.exists) el.append(h('p', { class: 'hint' }, 'No Bitcoin ark yet. Point it at your Bitcoin Core, then make it: captaind draws its key here.'));
+  el.append(daemonsTable(b.daemons));
+  if (b.daemons.find((d) => d.name === 'captaind').running) {
+    const [info, wallet] = await Promise.all([arca.deploy('ark-info'), arca.deploy('ark-wallet')]);
+    if (info.ok) {
+      const i = info.result;
+      const route = st.settings.bitcoin.route || `http://${st.settings.bitcoin.listen}`;
+      el.append(kv([
+        ['Server key', h('code', { 'data-testid': 'db-server-key' }, i.server_pubkey)],
+        ['Network', i.network],
+        ['Rounds', `every ${i.round_interval_secs} s; leaves live ${i.vtxo_lifetime} blocks; an exit waits ${i.vtxo_exit_delta} blocks`],
+        ['Boards', `from ${group(i.min_board_amount_sat)} sat, counted after ${i.required_board_confirmations} confirmations`],
+      ]));
+      share.append(h('div', { class: 'share', 'data-testid': 'db-share-text' }, `Bitcoin ark (Bark) on ${i.network}\nkey   ${i.server_pubkey}\nroute ${route}`),
+        h('div', { class: 'row' }, h('button', { class: 'ghost small', onclick: () => arca.copy(`${i.server_pubkey} ${route}`) }, 'Copy')));
+    } else el.append(refusalEl(info.refusal, 'the ark\'s info'));
+    if (wallet.ok && wallet.result && wallet.result.rounds) {
+      const w = wallet.result.rounds;
+      el.append(h('h2', { class: 'sub' }, 'Round wallet (fund it: rounds are paid from it)'), kv([
+        ['Address', h('code', { 'data-testid': 'db-round-address' }, w.address)],
+        ['Balance', h('span', { 'data-testid': 'db-round-balance' }, `${group(w.total_balance != null ? w.total_balance : w.confirmed_balance)} sat`)],
+      ]));
+    } else if (!wallet.ok) el.append(refusalEl(wallet.refusal, 'the round wallet'));
+  } else share.append(h('p', { class: 'hint' }, '—'));
+}
+loaders.deploy = async () => {
+  await refreshState();
+  try { labels = await arca.assetLabels(); } catch { /* names are a convenience */ }
+  const st = await arca.deployState();
+  const first = !deployState;
+  deployState = st;
+  if (first || !document.querySelector('[data-view=deploy] :focus')) fillDeploy(st);
+  const pg = st.postgres;
+  clear($('d-pg')).append(...kv([
+    ['Programs', pg.found ? h('code', {}, pg.found) : h('span', { class: 'bad' }, 'not found: install PostgreSQL, or name its directory')],
+    ['Cluster', pg.initialised ? `PostgreSQL ${pg.version}, ${pg.running ? `running (PID ${pg.pid})` : 'stopped'}, on 127.0.0.1:${pg.port}` : 'not made yet'],
+    ['Backup directory', h('code', {}, st.backupDir)],
+    ['Binaries carried', Object.entries(st.binaries).map(([k, v]) => `${k} ${v ? 'yes' : 'missing'}`).join(' · ')],
+  ]).childNodes);
+  $('ds-create').disabled = st.sequentia.exists; $('db-create').disabled = st.bitcoin.exists;
+  await Promise.all([renderSeqStatus(st), renderArkStatus(st)]);
+  if (deployTimer) clearTimeout(deployTimer);
+  deployTimer = setTimeout(() => { if (document.body.dataset.view === 'deploy') loaders.deploy().catch(() => {}); }, 10000);
+};
+$('d-refresh').addEventListener('click', () => loaders.deploy());
+$('ds-add-asset').addEventListener('click', () => $('ds-assets').append(assetRow()));
+$('ds-save').addEventListener('click', async () => { if (await saveDeploy($('ds-msg'))) show($('ds-msg'), { ok: true }, 'Saved. A change to the assets or fees reaches a running operator with "Reload"; any other, with a stop and a start.'); });
+$('db-save').addEventListener('click', async () => { if (await saveDeploy($('db-msg'))) show($('db-msg'), { ok: true }, 'Saved. A running ark takes it at its next start.'); });
+$('ds-node-test').addEventListener('click', async () => {
+  if (!(await saveDeploy($('ds-node-msg')))) return;
+  await deployCall('seq-test-node', $('ds-node-msg'), 'Asking the node…', (r) => `The node answers: ${r.chain}, ${group(r.blocks)} blocks, anchors validated, transaction index ${r.txindex === null ? 'unknown' : r.txindex ? 'on' : 'off'}; genesis ${r.genesis}.`);
+});
+$('db-core-test').addEventListener('click', async () => {
+  if (!(await saveDeploy($('db-core-msg')))) return;
+  await deployCall('ark-test-core', $('db-core-msg'), 'Asking Bitcoin Core…', (r) => `Bitcoin Core answers: ${r.subversion} on ${r.chain}, ${group(r.blocks)} blocks, transaction index ${r.txindex === null ? 'unknown' : r.txindex ? 'on' : 'off'}.`);
+});
+function deployButton(id, action, msg, busy, ok) {
+  $(id).addEventListener('click', async () => {
+    if (!(await saveDeploy($(msg)))) return;
+    $(id).disabled = true;
+    try { await deployCall(action, $(msg), busy, ok); } finally { $(id).disabled = false; await loaders.deploy(); }
+  });
+}
+deployButton('ds-create', 'seq-create', 'ds-msg', 'Drawing the operator key and the wallet\'s mnemonic, and making the signer\'s record…', (r) => `Made the operator ${r.state.operator_key} on ${r.node.chain}.`);
+deployButton('ds-start', 'seq-start', 'ds-msg', 'Starting the database, the signer and arcad…', () => 'The operator runs and answers.');
+deployButton('ds-stop', 'seq-stop', 'ds-msg', 'Stopping arcad, then the signer…', (r) => `Stopped: ${r.stopped.map((x) => `${x.name} ${x.was}`).join('; ')}${r.database ? `; PostgreSQL ${r.database.was}` : ''}.`);
+deployButton('ds-reload', 'seq-reload', 'ds-msg', 'Writing arcad\'s configuration and telling it to read it again…', () => 'arcad read its configuration again (its log says what it took).');
+deployButton('db-create', 'ark-create', 'db-msg', 'Making the database and captaind\'s key…', (r) => `Made the Bitcoin ark on ${r.state.network}, against ${r.core.subversion}.`);
+deployButton('db-start', 'ark-start', 'db-msg', 'Starting the database, captaind and its watchman…', (r) => `The ark runs: server key ${r.server_pubkey}.`);
+deployButton('db-stop', 'ark-stop', 'db-msg', 'Stopping the watchman, then captaind…', (r) => `Stopped: ${r.stopped.map((x) => `${x.name} ${x.was}`).join('; ')}${r.database ? `; PostgreSQL ${r.database.was}` : ''}.`);
+$('ds-address').addEventListener('click', async () => {
+  const out = await arca.deploy('seq-address');
+  const el = clear($('ds-address-out'));
+  if (!out.ok) return el.append(refusalEl(out.refusal, 'a funding address'));
+  el.append(kv([['Address', h('code', { 'data-testid': 'ds-funding-address' }, out.result.address)], ['Script', h('code', { 'data-testid': 'ds-funding-script' }, out.result.script_pubkey)], ['Index', out.result.index]]));
+});
+$('d-backup-now').addEventListener('click', async () => {
+  if (!(await saveDeploy($('d-backup-msg')))) return;
+  await deployCall('backup', $('d-backup-msg'), 'Writing the secrets and a base backup of the database…',
+    (r) => `Written to ${r.dir}: ${r.written.join(', ')}; the database's WAL is archived in ${r.wal} as it is written.`);
+});
+$('d-log-read').addEventListener('click', async () => {
+  const out = await arca.deploy('logs', { lines: 300 });
+  $('d-log').textContent = out.ok ? (out.result[$('d-log-which').value] || []).join('\n') : out.refusal.message;
+});
 
 // --- live updates -------------------------------------------------------------------------------
 arca.onSyncEvent(async (e) => {

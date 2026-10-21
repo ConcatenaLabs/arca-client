@@ -122,10 +122,21 @@ branch left on one laptop is invisible to every other machine and to the box.
   patched here. The Bitcoin side runs on its own queue (`main.js`), because
   Bark lets one process at a time open its wallet; every Bark run of the app
   goes through it, and `arca balance` runs with `--without-bitcoin`.
+- **Deploy runs daemons, and they outlive the app.** `src/main/deploy.js`
+  runs `arcad` and `arca-signer` (built at the same pin as `arca`), Bark's
+  `captaind` and `watchmand` (at the same Bark release), and a PostgreSQL
+  cluster of the app's own, each through `src/main/daemon.js`: detached, its
+  PID written down and checked against `/proc` before any signal, stopped on
+  the signal it shuts down cleanly on. Keys and mnemonics are drawn on the
+  machine (`src/main/secrets.js`) into files only their owner reads, never
+  on a command line, never in the app's settings. Nothing is served by
+  default: no asset, no rate source, no fee asset; the exit delays default
+  to the specification's [254, 338].
 - **Tests.** `npm run lint` and `npm test` (the manager, the command
-  whitelist, the scheduler, the rails and the settings, against a stand-in
-  `arca`) run in CI. The drives (`test/e2e/drive.mjs`, and
-  `drive-bitcoin.mjs` with a Bitcoin ark beside the operator) need running
+  whitelist, the scheduler, the rails, the settings and Deploy's parts,
+  against stand-ins) run in CI. The drives (`test/e2e/drive.mjs`,
+  `drive-bitcoin.mjs` with a Bitcoin ark beside the operator, and
+  `drive-deploy.mjs`, which runs an operator from the app) need running
   harnesses and are run by hand; see the README.
 - **Windows.** `npm run dist:win` builds the zip on Linux once
   `build/arca-win-x64` is staged; the NSIS installer comes from the

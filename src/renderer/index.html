@@ -26,6 +26,7 @@
       <button class="nav" data-view="schedule">Schedule</button>
       <button class="nav" data-view="exit">Exit drill</button>
       <button class="nav" data-view="refusals">Refusals</button>
+      <button class="nav" data-view="deploy" data-testid="nav-deploy">Deploy</button>
       <button class="nav" data-view="settings">Settings</button>
     </nav>
     <div class="rail-foot">
@@ -60,7 +61,8 @@
           <label class="disabled"><input type="radio" name="op-src" value="registry" disabled> From the registry (not offered by this build)</label>
         </div>
         <label>Operator address<input id="j-op-url" data-testid="operator-url" placeholder="https://operator.example/arca"></label>
-        <p class="hint">The wallet pins the operator's key when it joins and shows it: compare it with the key the operator publishes through a channel you trust.</p>
+        <label>Operator key (optional: the one its runner gave you with the address)<input id="j-op-key" data-testid="operator-key-in" placeholder="64 hex characters" autocomplete="off"></label>
+        <p class="hint">The wallet pins the operator's key when it joins and shows it: compare it with the key the operator publishes through a channel you trust. Given here, the app compares it for you, and keeps the wallet only when the server shows that key.</p>
       </div>
 
       <div class="panel">
@@ -112,6 +114,7 @@
             <option value="mainnet">mainnet</option><option value="signet">signet</option><option value="mutinynet">mutinynet</option><option value="regtest">regtest</option>
           </select></label>
           <label>The ark's server<input id="bt-ark" data-testid="btc-ark" placeholder="https://ark.example.org"></label>
+          <label>Its server key (optional: the one its runner gave you)<input id="bt-ark-key" data-testid="btc-ark-key" placeholder="02… or 03…, 66 hex characters" autocomplete="off"></label>
         </div>
         <div class="seg" role="radiogroup">
           <label><input type="radio" name="bt-src" value="bitcoind" checked data-testid="btc-src-bitcoind"> Your Bitcoin Core node (version 29 or later, with -txindex)</label>
@@ -350,6 +353,131 @@
       <div id="f-list" data-testid="refusals"></div>
     </section>
 
+    <!-- DEPLOY -->
+    <section class="view" data-view="deploy">
+      <header class="vhead"><h1>Deploy</h1><button class="ghost" id="d-refresh" data-testid="deploy-refresh">Refresh</button></header>
+      <p class="lead">Runs an operator on this machine: an Arca operator on Sequentia (<code>arcad</code> and <code>arca-signer</code>, carried by this app), and a Bitcoin ark (Bark's <code>captaind</code> and <code>watchmand</code>). Their keys are drawn here and stay on this machine. They keep running when the app is closed; stop them here.</p>
+
+      <div class="panel" data-testid="deploy-commitments">
+        <h2 class="sub">What running an operator commits you to</h2>
+        <ul class="commit">
+          <li><b>Funds in its pools.</b> Every round is funded from the operator's own coins of its asset: you pay each asset you serve into the operator's wallet, and those coins stay locked in batches until they expire and are swept back, weeks later. A Bitcoin ark's rounds are funded the same way, in BTC, from its round wallet.</li>
+          <li><b>Staying online.</b> The operator co-signs every payment and refresh, and its watcher answers a stale exit on the chain. While it is down, its holders can only take their coins home on the chain by themselves.</li>
+          <li><b>The exit deadlines its holders rely on.</b> A holder must refresh or exit each coin before its exit deadline, three days before its batch expires. If the operator is not there to refresh it, the holder exits on the chain: keep the operator running, and announce any end of service far ahead of those deadlines.</li>
+          <li><b>No keepers here.</b> The signer's record is made without keepers on other machines. That is right for an operator holding its own coins and for trials. An operator holding other people's coins runs with three keepers, two required, each on a machine of its own, as arca's <code>doc/operator-procedure.md</code> says; this screen does not set them up.</li>
+          <li><b>Nothing restored from a copy.</b> The signer's record and the database are never put back from an older copy: a record cut back signs nothing, and a database is restored only to its latest commit.</li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h2 class="sub">The database</h2>
+        <p class="hint">Both operators keep their state in a PostgreSQL cluster of the app's own, made and run here: it listens on 127.0.0.1 alone, every role logs in with a password the app draws, and every commit is archived to the backup directory as it is written. It needs PostgreSQL's server programs installed (<code>apt install postgresql</code>).</p>
+        <div class="grid2">
+          <label>PostgreSQL's programs (the directory with initdb and postgres; empty: look in the usual places)<input id="d-pg-bin" data-testid="deploy-pg-bin" placeholder="/usr/lib/postgresql/16/bin"></label>
+          <label>Its port (fixed once the cluster is made)<input id="d-pg-port" data-testid="deploy-pg-port" placeholder="25432"></label>
+          <label>Backup directory (put it on other storage than this disk)<input id="d-backup" data-testid="deploy-backup-dir" placeholder="/media/backup/arca-operator"></label>
+        </div>
+        <div id="d-pg" class="kv" data-testid="deploy-pg"></div>
+      </div>
+
+      <div class="panel" data-testid="deploy-seq">
+        <h2 class="sub">Sequentia · an Arca operator</h2>
+        <div class="grid2">
+          <label>Your Sequentia node's RPC address<input id="ds-node-url" data-testid="ds-node-url" placeholder="http://127.0.0.1:18332/"></label>
+          <label>Its cookie file (or a user and password)<input id="ds-node-cookie" data-testid="ds-node-cookie"></label>
+          <label>RPC user<input id="ds-node-user" data-testid="ds-node-user" autocomplete="off"></label>
+          <label>RPC password<input id="ds-node-pass" data-testid="ds-node-pass" type="password" autocomplete="off"></label>
+        </div>
+        <div class="row"><button class="ghost" id="ds-node-test" data-testid="ds-node-test">Test the node</button></div>
+        <div id="ds-node-msg" class="msg" data-testid="ds-node-msg"></div>
+        <div class="grid2">
+          <label>Listen address (arcad's own)<input id="ds-listen" data-testid="ds-listen" placeholder="127.0.0.1:3535"></label>
+          <label>Route: the address wallets reach it at (a reverse proxy's, with TLS, for anyone but this machine)<input id="ds-route" data-testid="ds-route" placeholder="https://example.org/arca"></label>
+          <label>Least exit delay, in 512-second units (the specification's 36 hours: 254)<input id="ds-delay-min" data-testid="ds-delay-min" placeholder="254"></label>
+          <label>Most exit delay (48 hours: 338)<input id="ds-delay-max" data-testid="ds-delay-max" placeholder="338"></label>
+          <label>A round every … seconds, while participations wait<input id="ds-round" data-testid="ds-round" placeholder="60"></label>
+          <label>Refresh fee, parts per million of a coin's value, at most (the asset's own unless it sets one)<input id="ds-refresh-ppm" data-testid="ds-refresh-ppm" placeholder="0"></label>
+          <label>Offboard fee, parts per million<input id="ds-offboard-ppm" placeholder="0"></label>
+          <label>Lightning fee, parts per million<input id="ds-lightning-ppm" placeholder="0"></label>
+        </div>
+        <h2 class="sub">Assets served</h2>
+        <p class="hint">None is served until you list it, each with its smallest leaf and, if you name one, where its rate comes from: the node's own rate, a file your price process writes, or a command. A rate prices only what you set as a value; without a source, nothing of the asset is priced from one. The operator serves the assets in the order listed here.</p>
+        <div id="ds-assets" data-testid="ds-assets"></div>
+        <div class="row"><button class="ghost" id="ds-add-asset" data-testid="ds-add-asset">Add an asset</button></div>
+        <div class="row">
+          <button class="ghost" id="ds-save" data-testid="ds-save">Save</button>
+          <button class="primary" id="ds-create" data-testid="ds-create">Make the operator</button>
+          <button class="primary" id="ds-start" data-testid="ds-start">Start</button>
+          <button class="ghost" id="ds-stop" data-testid="ds-stop">Stop</button>
+          <button class="ghost" id="ds-reload" data-testid="ds-reload">Reload assets and fees</button>
+        </div>
+        <div id="ds-msg" class="msg" data-testid="ds-msg"></div>
+        <h2 class="sub">Status</h2>
+        <div id="ds-status" data-testid="ds-status"></div>
+        <h2 class="sub">For wallets</h2>
+        <div id="ds-share" data-testid="ds-share"></div>
+        <h2 class="sub">The operator key and its record</h2>
+        <div id="ds-record" data-testid="ds-record"></div>
+        <h2 class="sub">Funding its pools</h2>
+        <p class="hint">Pay each asset you serve to an address of the operator's wallet: its rounds are funded from those coins. Each press hands out a new address, recorded by arcad.</p>
+        <div class="row"><button class="ghost" id="ds-address" data-testid="ds-address">A funding address</button></div>
+        <div id="ds-address-out" data-testid="ds-address-out"></div>
+      </div>
+
+      <div class="panel" data-testid="deploy-btc">
+        <h2 class="sub">Bitcoin · a Bitcoin ark (Bark's server)</h2>
+        <div class="grid2">
+          <label>Network<select id="db-net" data-testid="db-net">
+            <option value="testnet4">testnet4</option><option value="signet">signet</option><option value="regtest">regtest</option><option value="mainnet">mainnet</option>
+          </select></label>
+          <label>Bitcoin Core's RPC address (version 31 or later, with -txindex)<input id="db-core-url" data-testid="db-core-url" placeholder="http://127.0.0.1:48332/"></label>
+          <label>Its cookie file (or a user and password)<input id="db-core-cookie" data-testid="db-core-cookie"></label>
+          <label>RPC user<input id="db-core-user" autocomplete="off"></label>
+          <label>RPC password<input id="db-core-pass" type="password" autocomplete="off"></label>
+        </div>
+        <div class="row"><button class="ghost" id="db-core-test" data-testid="db-core-test">Test Bitcoin Core</button></div>
+        <div id="db-core-msg" class="msg" data-testid="db-core-msg"></div>
+        <div class="grid2">
+          <label>Listen address (captaind's public gRPC)<input id="db-listen" data-testid="db-listen" placeholder="127.0.0.1:3545"></label>
+          <label>Admin port (on 127.0.0.1)<input id="db-admin" data-testid="db-admin" placeholder="3546"></label>
+          <label>Route: the address wallets reach it at<input id="db-route" data-testid="db-route" placeholder="https://example.org"></label>
+          <label>A round every … seconds<input id="db-round" data-testid="db-round" placeholder="30"></label>
+          <label>A leaf lives … blocks<input id="db-life" data-testid="db-life" placeholder="2016"></label>
+          <label>An exit waits … blocks (the window to answer a stale one)<input id="db-delta" data-testid="db-delta" placeholder="72"></label>
+          <label>Confirmations before a board counts<input id="db-confs" data-testid="db-confs" placeholder="2"></label>
+          <label>Smallest board, in sat<input id="db-minboard" data-testid="db-minboard" placeholder="10000"></label>
+          <label>Largest leaf, in sat<input id="db-maxleaf" placeholder="5000000"></label>
+        </div>
+        <p class="hint">The ark takes no Lightning payments: it runs without a Lightning gateway. Its fees are Bark's own schedule.</p>
+        <div class="row">
+          <button class="ghost" id="db-save" data-testid="db-save">Save</button>
+          <button class="primary" id="db-create" data-testid="db-create">Make the ark</button>
+          <button class="primary" id="db-start" data-testid="db-start">Start</button>
+          <button class="ghost" id="db-stop" data-testid="db-stop">Stop</button>
+        </div>
+        <div id="db-msg" class="msg" data-testid="db-msg"></div>
+        <h2 class="sub">Status</h2>
+        <div id="db-status" data-testid="db-status"></div>
+        <h2 class="sub">For wallets</h2>
+        <div id="db-share" data-testid="db-share"></div>
+      </div>
+
+      <div class="panel">
+        <h2 class="sub">Backup</h2>
+        <p class="hint">Writes each operator's secrets (the operator key, the wallets' mnemonics) and configuration into the backup directory, and a base backup of the database, which the WAL archived there since completes. Neither the signer's record nor the database is ever restored from a copy.</p>
+        <div class="row"><button class="ghost" id="d-backup-now" data-testid="deploy-backup">Back up now</button></div>
+        <div id="d-backup-msg" class="msg" data-testid="deploy-backup-msg"></div>
+      </div>
+
+      <div class="panel">
+        <h2 class="sub">Logs</h2>
+        <div class="row"><select id="d-log-which" data-testid="deploy-log-which">
+          <option value="arcad">arcad</option><option value="arca-signer">arca-signer</option><option value="captaind">captaind</option><option value="watchmand">watchmand</option><option value="postgres">PostgreSQL</option>
+        </select><button class="ghost" id="d-log-read" data-testid="deploy-log-read">Read</button></div>
+        <pre id="d-log" class="log" data-testid="deploy-log"></pre>
+      </div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="view" data-view="settings">
       <header class="vhead"><h1>Settings</h1></header>
@@ -375,6 +503,10 @@
         </div>
         <div class="row"><button id="st-mode-save" class="ghost">Apply</button></div>
         <div id="st-mode-msg" class="msg"></div>
+      </div>
+      <div class="panel">
+        <h2 class="sub">Mode</h2>
+        <label class="check"><input type="checkbox" id="st-developer" data-testid="developer-mode"> Developer mode: every rail, and the Deploy screen, which runs an operator on this machine</label>
       </div>
       <div class="panel">
         <h2 class="sub">Log</h2>

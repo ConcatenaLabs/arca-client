@@ -11,6 +11,8 @@ const { nodeRpc, checkNode } = require('./node-rpc');
 const { loadConfig, saveConfig, defaultConfig } = require('./config');
 const { argv } = require('./commands');
 const { swapArgv, activeSwaps } = require('./swap');
+const { Deploy } = require('./deploy');
+const { arkInfo } = require('./ark-server');
 
 // ARCA_CLIENT_HOME moves every file the app writes (its settings and the
 // wallet's directory) under one directory: a second profile on one machine,
@@ -58,6 +60,18 @@ function bundledBarkVersion() {
   return null;
 }
 
+// The operator daemons the Deploy screen runs: arcad and arca-signer beside
+// the arca client, Bark's captaind and watchmand beside Bark's client.
+function beside(bin, name) {
+  if (!bin) return null;
+  const p = path.join(path.dirname(bin), process.platform === 'win32' ? `${name}.exe` : name);
+  try { return fs.existsSync(p) ? p : null; } catch { return null; }
+}
+function deployBins() {
+  const a = bundledArca(); const b = bundledBark();
+  return { arcad: beside(a, 'arcad'), signer: beside(a, 'arca-signer'), captaind: beside(b, 'captaind'), watchmand: beside(b, 'watchmand') };
+}
+
 let config = null;
 function cfg() {
   if (!config) config = loadConfig(app.getPath('userData'), defaultConfig(homeDir()));
@@ -86,6 +100,14 @@ function btcWallet() { try { return fs.existsSync(path.join(datadir(), 'bitcoin'
 
 let runner = null;
 let scheduler = null;
+let deploy = null;
+function makeDeploy() {
+  deploy = new Deploy({
+    home: homeDir(), bins: deployBins(),
+    settings: () => cfg().deploy || null,
+    save: (d) => { cfg().deploy = d; save(); },
+  });
+}
 // The Bitcoin side's own queue: Bark lets one process at a time open its
 // wallet, and a claim holds it while a payer pays.
 let btcRunner = null;
@@ -258,9 +280,17 @@ ipcMain.handle('state', () => {
       wallet: btcWallet(), settings: Object.assign({}, c.bitcoin, { password: c.bitcoin.password ? '••••' : '' }),
       bark: barkBin(), version: c.mode === 'attached' ? null : bundledBarkVersion(), runner: btcRunner.status(), claim: claimState(),
     },
-    platform: process.platform, appVersion: app.getVersion(),
+    platform: process.platform, appVersion: app.getVersion(), developer: c.developer !== false,
   };
 });
+
+// --- Deploy: an operator and a Bitcoin ark run from the app -------------------------
+ipcMain.handle('deploy-state', () => deploy.status());
+ipcMain.handle('deploy', async (_e, action, a) => {
+  if (cfg().developer === false) return { ok: false, refusal: { kind: 'input', message: 'Deploy is a developer-mode screen: turn developer mode on in Settings' } };
+  try { return { ok: true, result: await deploy.run(String(action), a || {}) }; } catch (e) { return { ok: false, refusal: { kind: 'deploy', message: e.message } }; }
+});
+ipcMain.handle('set-developer', (_e, on) => { const c = cfg(); c.developer = !!on; save(); return c.developer; });
 ipcMain.handle('arca', async (_e, command, a) => {
   let args;
   try { args = argv(command, a); } catch (e) { return { ok: false, refusal: { kind: 'input', message: e.message }, notes: [] }; }
@@ -284,6 +314,15 @@ ipcMain.handle('btc', async (_e, command, a) => {
       password: String(b.password || ''), esplora: String(b.esplora || '').trim() };
     save();
     if (!runner.exists()) return { ok: false, refusal: { kind: 'input', message: 'join an operator first: the Bitcoin ark wallet is made from this wallet\'s mnemonic' }, notes: [] };
+    // The ark's server key, when its runner gave it with its route: the
+    // wallet is made only against a server that shows that key.
+    const wantKey = a && a.server_key ? String(a.server_key).trim().toLowerCase() : '';
+    if (wantKey) {
+      if (!/^0[23][0-9a-f]{64}$/.test(wantKey)) return { ok: false, refusal: { kind: 'input', message: 'the ark\'s server key is 66 hex characters (a compressed public key), as its runner publishes it' }, notes: [] };
+      let info;
+      try { info = await arkInfo(c.bitcoin.ark); } catch (e) { return { ok: false, refusal: { kind: 'ark', message: `the ark at ${c.bitcoin.ark} did not give its key: ${e.message}` }, notes: [] }; }
+      if (info.server_pubkey !== wantKey) return { ok: false, refusal: { kind: 'input', message: `the ark at ${c.bitcoin.ark} shows the server key ${info.server_pubkey}, not ${wantKey}: no wallet was made` }, notes: [] };
+    }
     const env = c.bitcoin.source === 'bitcoind' && !c.bitcoin.cookie && c.bitcoin.password ? { ARCA_BITCOIND_PASSWORD: c.bitcoin.password } : {};
     return btcCall('create', Object.assign({}, c.bitcoin, { birthday_height: a && a.birthday_height }), { env });
   }
@@ -328,7 +367,7 @@ ipcMain.handle('set-node', (_e, node) => {
     password: node.password === '••••' ? c.node.password : String(node.password || ''), cookie: String(node.cookie || '').trim() };
   save(); return true;
 });
-ipcMain.handle('set-operator', (_e, op) => { const c = cfg(); c.operator = { url: String(op.url || '').trim(), source: 'address' }; save(); return true; });
+ipcMain.handle('set-operator', (_e, op) => { const c = cfg(); c.operator = { url: String(op.url || '').trim(), source: 'address', key: String(op.key || '').trim().toLowerCase() }; save(); return true; });
 ipcMain.handle('test-node', async (_e, node) => {
   const c = cfg();
   const n = Object.assign({}, c.node, node || {});
@@ -348,6 +387,11 @@ ipcMain.handle('asset-labels', async () => {
 ipcMain.handle('join', async (_e, j) => {
   const c = cfg();
   if (runner.exists()) return { ok: false, refusal: { kind: 'input', message: `a wallet already exists in ${datadir()}` } };
+  // The operator's key, when the runner of the operator gave it with its
+  // route: the wallet is kept only when the key it pinned is that one.
+  const wantKey = j && j.operatorKey ? String(j.operatorKey).trim().toLowerCase() : '';
+  if (wantKey && !/^[0-9a-f]{64}$/.test(wantKey)) return { ok: false, refusal: { kind: 'input', message: 'the operator key is 64 hex characters, as the operator publishes it' } };
+  const dirExisted = fs.existsSync(datadir());
   const node = c.node;
   const out = await (async () => {
     try {
@@ -358,8 +402,16 @@ ipcMain.handle('join', async (_e, j) => {
       return { ok: true, result, notes };
     } catch (e) { return { ok: false, refusal: e.refusal || { kind: 'client', message: e.message }, notes: e.notes || [] }; }
   })();
+  if (out.ok && wantKey && out.result && out.result.operator !== wantKey) {
+    // Nothing was boarded yet: the wallet made against another key is
+    // removed, and the join refused, naming both keys.
+    const got = out.result.operator;
+    if (!dirExisted && c.mode !== 'attached') { try { fs.rmSync(datadir(), { recursive: true, force: true }); } catch { /* best effort */ } }
+    return { ok: false, refusal: { kind: 'input', message: `the server at ${c.operator.url} shows the operator key ${got}, not ${wantKey}: the wallet it made was removed, and nothing was boarded` }, notes: out.notes };
+  }
   if (out.ok) {
     c.backedUp = !!(j && j.mnemonic);
+    if (wantKey) c.operator.key = wantKey;
     save();
     if (c.autoSync) scheduler.start();
   }
@@ -405,6 +457,7 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(() => {
+    makeDeploy();
     makeRunner();
     createWindow();
   });
