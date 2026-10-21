@@ -15,6 +15,7 @@
     "icon": "node build/make-icon.js",
     "drive": "node test/e2e/drive.mjs",
     "drive:bitcoin": "node test/e2e/drive-bitcoin.mjs",
+    "drive:swap": "node test/e2e/drive-swap.mjs",
     "dist:linux": "electron-builder --linux AppImage",
     "dist:win": "electron-builder --win zip"
   },

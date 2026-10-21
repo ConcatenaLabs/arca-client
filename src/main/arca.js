@@ -122,6 +122,18 @@ class ArcaRunner {
     return job;
   }
 
+  // Holds the queue for `fn`, an async function: every run queued before it
+  // ends first, and none queued after it starts until `fn` has settled. For a
+  // run on another runner's queue that opens this runner's wallet too (a swap
+  // of BTC for an asset opens the Arca wallet and Bark's).
+  hold(fn) {
+    if (this.stopping) return Promise.reject(new RunError({ kind: 'client', message: 'the app is stopping: nothing more is run' }));
+    this.pending += 1;
+    const job = this.queue.then(() => { this.pending -= 1; return fn(); });
+    this.queue = job.catch(() => {});
+    return job;
+  }
+
   _spawn(args, opts) {
     if (this.stopping) return Promise.reject(new RunError({ kind: 'client', message: 'the app is stopping: nothing more is run' }));
     if (!this.bin || !fs.existsSync(this.bin)) {

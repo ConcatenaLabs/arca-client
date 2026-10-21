@@ -788,6 +788,107 @@ $('st-mode-save').addEventListener('click', async () => {
   if (!state.joined && mode === 'bundled') go('join');
 });
 
+// --- the swap of BTC for an asset ------------------------------------------------------------
+// What a side gives and gets, every fee with it, as the wallet says it before
+// anything is locked.
+function swapShows(shows) {
+  const side = (title, x, testid) => {
+    if (!x) return h('div', {}, title, ': —');
+    const what = x.asset === 'BTC'
+      ? `${group(x.sat != null ? x.sat : x.of)} sat of BTC${x.of && x.sat != null && x.sat !== x.of ? ` (${group(x.of)}, Bark's fee ${group(x.bark_fee_sat)} sat)` : ''}`
+      : `${group(x.atoms)} atoms of ${assetName(x.asset)}${x.of_which_fee ? ` (the operator's fee ${group(x.of_which_fee)} included)` : ''}${x.operator_fee ? ` (${group(x.of)}, the operator's fee ${group(x.operator_fee)})` : ''}`;
+    return h('div', { class: 'shows', 'data-testid': testid }, h('b', {}, `${title}: `), what, h('div', { class: 'note' }, x.note || ''));
+  };
+  return h('div', { class: 'swap-shows' }, side('Gives', shows && shows.gives, 'swap-gives'), side('Gets', shows && shows.gets, 'swap-gets'));
+}
+const SWAP_WORDS = {
+  offered: 'offered: waiting for a taker', taken: 'agreed: nothing locked yet', locking: 'locking the asset', locked: 'the asset is locked; claiming the BTC',
+  paying: 'paying the BTC', claimed: 'the BTC is claimed', claiming: 'claiming the asset leaf', done: 'done', lapsed: 'lapsed: nothing locked',
+  abandoned: 'abandoned: nothing paid', btc_failed: 'the BTC payment did not go through', btc_lost: 'the BTC leg ended unclaimed; the asset comes back',
+  refunded: 'refunded: the asset came back', cancelled: 'cancelled',
+};
+loaders.swap = async () => {
+  const el = $('sw-list');
+  const st = await arca.swapStatus();
+  $('sw-follow').textContent = st.running ? 'Following the swaps under way…' : st.active ? `${st.active} swap(s) under way: followed every few seconds` : '';
+  const out = await arca.swap('list');
+  if (!out.ok) { show(el, out, '', 'swaps'); return; }
+  renderSwaps(out.result);
+};
+function renderSwaps(list) {
+  const el = clear($('sw-list'));
+  const swaps = Object.values((list && list.swaps) || {}).sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  if (!swaps.length) el.append(h('p', { class: 'hint' }, 'No swap yet.'));
+  else {
+    el.append(table(['Swap', 'This wallet', 'Terms', 'State', 'What happened'], swaps.map((s) => [
+      h('span', { title: s.id, 'data-testid': 'swap-id' }, `${String(s.id).slice(0, 12)}…`),
+      s.role === 'P' ? `gives ${assetName(s.asset)}, gets BTC` : `gives BTC, gets ${assetName(s.asset)}`,
+      `${group(s.atoms)} atoms ⇄ ${group(s.sats)} sat`,
+      h('span', { 'data-testid': 'swap-state', 'data-state': s.state }, SWAP_WORDS[s.state] || s.state),
+      h('div', {}, s.outcome || s.note || '',
+        s.log ? h('details', { class: 'raw' }, h('summary', {}, 'Log'), h('pre', {}, s.log.map((l) => `${median(l.at)} ${l.state}: ${l.what}`).join('\n'))) : null,
+        ['offered', 'taken'].includes(s.state) ? h('button', { class: 'ghost small', 'data-testid': 'swap-cancel', onclick: async () => {
+          const o = await arca.swap('cancel', { swap: s.id });
+          if (!o.ok) sessionRefusals.unshift({ at: new Date(), context: 'swap cancel', refusal: o.refusal });
+          loaders.swap();
+        } }, 'Cancel') : null),
+    ])));
+  }
+  const legs = (list && list.restored_legs) || [];
+  if (legs.length) {
+    el.append(h('h3', {}, 'Legs a restore found of swaps whose record was lost'),
+      table(['Hash', 'Leg', 'State'], legs.map((l) => [`${String(l.hash).slice(0, 12)}…`, l.leg, l.state])));
+  }
+}
+$('sw-refresh').addEventListener('click', () => loaders.swap());
+$('sw-offer').addEventListener('click', async () => {
+  pending($('sw-offer-msg'), 'Making the offer…');
+  $('sw-offer-out').hidden = true;
+  const out = await arca.swap('offer', { give: $('sw-give').value, asset: $('sw-asset').value.trim(), atoms: $('sw-atoms').value.trim(),
+    sats: $('sw-sats').value.trim() });
+  show($('sw-offer-msg'), out, 'Offered: nothing is locked. Hand the taker this offer.', 'swap offer');
+  if (out.ok) {
+    $('sw-offer-msg').append(swapShows(out.result.shows));
+    $('sw-offer-text').textContent = out.result.offer;
+    $('sw-offer-out').hidden = false;
+    loaders.swap();
+  }
+});
+$('sw-offer-copy').addEventListener('click', () => arca.copy($('sw-offer-text').textContent));
+$('sw-read').addEventListener('click', async () => {
+  pending($('sw-read-msg'), 'Reading the offer…');
+  $('sw-take').disabled = true;
+  const out = await arca.swap('read', { offer: $('sw-offer-in').value.trim() });
+  show($('sw-read-msg'), out, 'Taking it would give and get this; nothing is asked or locked yet.', 'swap read');
+  if (out.ok) { $('sw-read-msg').append(swapShows(out.result.shows)); $('sw-take').disabled = false; }
+});
+$('sw-take').addEventListener('click', async () => {
+  pending($('sw-read-msg'), 'Taking the offer…');
+  const out = await arca.swap('take', { offer: $('sw-offer-in').value.trim() });
+  show($('sw-read-msg'), out, 'Taken: nothing is locked yet.', 'swap take');
+  if (out.ok) {
+    $('sw-read-msg').append(swapShows(out.result.shows));
+    $('sw-take-text').textContent = out.result.take;
+    $('sw-take-out').hidden = false;
+    $('sw-take').disabled = true;
+    loaders.swap();
+  }
+});
+$('sw-take-copy').addEventListener('click', () => arca.copy($('sw-take-text').textContent));
+$('sw-complete').addEventListener('click', async () => {
+  pending($('sw-complete-msg'), 'Completing the offer…');
+  const out = await arca.swap('complete', { take: $('sw-take-in').value.trim() });
+  show($('sw-complete-msg'), out, 'Completed: the swap now runs on its own while the app runs.', 'swap complete');
+  if (out.ok) loaders.swap();
+});
+arca.onSwapEvent((e) => {
+  if (e.type === 'followed' && e.out && !e.out.ok) sessionRefusals.unshift({ at: new Date(e.at), context: 'swap follow', refusal: e.out.refusal });
+  if (document.body.dataset.view === 'swap') {
+    if (e.type === 'list') renderSwaps(e.list);
+    arca.swapStatus().then((st) => { $('sw-follow').textContent = st.running ? 'Following the swaps under way…' : st.active ? `${st.active} swap(s) under way: followed every few seconds` : ''; });
+  }
+});
+
 // --- tables -------------------------------------------------------------------------------------
 function table(head, rows) {
   return h('div', { class: 'table-wrap' }, h('table', {},

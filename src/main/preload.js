@@ -30,4 +30,9 @@ contextBridge.exposeInMainWorld('arca', {
   btcClaim: (args) => ipcRenderer.invoke('btc-claim', args || {}),
   btcClaimStop: () => ipcRenderer.invoke('btc-claim-stop'),
   onBtcEvent: (fn) => ipcRenderer.on('btc-event', (_e, ev) => fn(ev)),
+  // The swap of BTC for an asset with another wallet of the operator; the
+  // main process follows each swap under way on its own.
+  swap: (command, args) => ipcRenderer.invoke('swap', command, args || {}),
+  swapStatus: () => ipcRenderer.invoke('swap-status'),
+  onSwapEvent: (fn) => ipcRenderer.on('swap-event', (_e, ev) => fn(ev)),
 });
