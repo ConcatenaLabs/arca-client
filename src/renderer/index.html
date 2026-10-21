@@ -21,6 +21,7 @@
       <button class="nav" data-view="board">Board</button>
       <button class="nav" data-view="send">Send</button>
       <button class="nav" data-view="receive">Receive</button>
+      <button class="nav" data-view="swap" data-testid="nav-swap">Swap BTC</button>
       <button class="nav" data-view="coins">Coins</button>
       <button class="nav" data-view="schedule">Schedule</button>
       <button class="nav" data-view="exit">Exit drill</button>
@@ -252,6 +253,47 @@
       </div>
       <h2 class="sub">Requests waiting for a payment</h2>
       <div id="r-list" data-testid="requests"></div>
+    </section>
+
+    <!-- SWAP -->
+    <section class="view" data-view="swap">
+      <header class="vhead"><h1>Swap BTC for an asset</h1><div><button class="ghost" id="sw-refresh" data-testid="swap-refresh">Refresh</button></div></header>
+      <p class="hint">A swap of native BTC, held in your Bitcoin ark, for an asset held in this operator's tree, with another wallet of the operator, under one payment hash. The giver of the asset locks it first; the giver of the BTC pays only once its leaf of the asset is held and final; the claim of the BTC reveals the preimage that claims the asset. What each side gives and gets, with every fee, is shown before anything is locked. The app follows each swap under way on its own while it runs, so keep it running until the swap is done.</p>
+      <div class="grid2">
+        <div class="panel">
+          <h2 class="sub">Make an offer</h2>
+          <label>This wallet gives<select id="sw-give" data-testid="swap-give"><option value="asset">the asset, for BTC</option><option value="btc">BTC, for the asset</option></select></label>
+          <label>Asset<input id="sw-asset" data-testid="swap-asset" placeholder="asset id" list="asset-list"></label>
+          <div class="grid2">
+            <label>Atoms of the asset<input id="sw-atoms" data-testid="swap-atoms" inputmode="numeric"></label>
+            <label>Satoshis of BTC<input id="sw-sats" data-testid="swap-sats" inputmode="numeric"></label>
+          </div>
+          <div class="row"><button id="sw-offer" class="primary" data-testid="swap-offer">Make the offer</button></div>
+          <div id="sw-offer-msg" class="msg" data-testid="swap-offer-msg"></div>
+          <div id="sw-offer-out" hidden>
+            <div id="sw-offer-text" class="request" data-testid="swap-offer-text"></div>
+            <div class="row"><button id="sw-offer-copy" class="ghost">Copy</button></div>
+          </div>
+          <h2 class="sub">Complete your offer</h2>
+          <label>The taker's take<textarea id="sw-take-in" rows="2" data-testid="swap-take-in" placeholder="btc-swap-take:…"></textarea></label>
+          <div class="row"><button id="sw-complete" class="primary" data-testid="swap-complete">Complete</button></div>
+          <div id="sw-complete-msg" class="msg" data-testid="swap-complete-msg"></div>
+        </div>
+        <div class="panel">
+          <h2 class="sub">Take an offer</h2>
+          <label>The offer<textarea id="sw-offer-in" rows="3" data-testid="swap-offer-in" placeholder="btc-swap-offer:…"></textarea></label>
+          <div class="row"><button id="sw-read" class="ghost" data-testid="swap-read">Read it</button> <button id="sw-take" class="primary" data-testid="swap-take" disabled>Take it</button></div>
+          <div id="sw-read-msg" class="msg" data-testid="swap-read-msg"></div>
+          <div id="sw-take-out" hidden>
+            <p class="hint">Hand the maker this take; the swap then runs on its own.</p>
+            <div id="sw-take-text" class="request" data-testid="swap-take-text"></div>
+            <div class="row"><button id="sw-take-copy" class="ghost">Copy</button></div>
+          </div>
+        </div>
+      </div>
+      <h2 class="sub">Swaps</h2>
+      <div id="sw-follow" class="hint" data-testid="swap-follow"></div>
+      <div id="sw-list" data-testid="swaps"></div>
     </section>
 
     <!-- COINS -->

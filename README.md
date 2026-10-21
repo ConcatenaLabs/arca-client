@@ -56,6 +56,7 @@ a default.
 | Board | A new on-chain address to pay, and boarding: on-chain coins brought into Arca. The board's fee, size and the coins it spends are shown before anything is signed. A board is spendable once its transaction is final |
 | Send | Pays a receive request out of round. The asset is the one the request names, or the one you name. There is no default asset |
 | Receive | Makes a request for one payment, shown and copied. It lapses 27 days after it is made. The screen also lists the requests still waiting for a payment |
+| Swap BTC | Swaps native BTC in your Bitcoin ark for an asset in the operator's tree with another wallet of the same operator in the same Bitcoin ark (`arca btc-swap`). **Make an offer** (give the asset for BTC, or BTC for the asset) and hand its text to the other wallet; it **reads** the offer, sees what it gives and gets with every fee, and **takes** it; you **complete** your offer with its take. Nothing is locked until then, and each side's fees are shown before. The list shows every swap with its state and what happened, and a swap not locked yet can be cancelled |
 | Coins | Every coin with its state and dates. A coin received out of round is *operator-confirmed*. **Settle now** shows each coin's refresh fee before anything is signed, then signs for exactly those fees and hands the coin to the operator's next round |
 | Schedule | When the wallet must next sync (`next_sync_at`, the chain's median time) and why, each coin's dates, and the syncs this run of the app made |
 | Exit drill | Takes a coin to the chain from its record alone, without the operator. Each run shows what it would broadcast and at what fee, then goes as far as the chain allows: the unroll, then the claim once the exit delay has run |
@@ -86,6 +87,20 @@ the first payment goes back to the payer. "Stop waiting" ends the claim, and
 "Claim now" starts it again. While the app runs, it also has Bark refresh
 leaves near their expiry, every half hour. A build that does not carry Bark
 shows BTC's row, empty, saying so.
+
+A swap of BTC for an asset runs on its own once it is agreed: the giver of
+the asset locks it, the giver of the BTC pays once its leaf of the asset is
+held and final, the claim of the BTC reveals the preimage, and the giver of
+the BTC claims the asset with it. While a swap is under way the app runs
+`arca btc-swap follow` again a few seconds after each run ends: the giver
+of the asset must be claiming its BTC when the payer pays, since the ark's
+server fails a payment back that is not claimed within its forward timeout.
+Each run opens both the Arca wallet and Bark's, so it waits for both queues
+and holds them while it runs, a sync and a claim of up to 15 seconds; other
+commands wait that long. **Keep the app running until each swap is done.**
+A swap left unattended ends by its refunds: the asset comes back to its
+giver once the operator fails the receive back, days later, and the BTC to
+its payer once Bark fails the payment back.
 
 ## Where your data lives
 
@@ -230,6 +245,24 @@ is checked at the Bitcoin node or the Lightning peer.
 ARCA_OPERATOR_CONTROL=127.0.0.1:18640 ARCA_BITCOIN_ARK=/path/to/ark.sh npm run drive:bitcoin -- test-results/drive-bitcoin
 ```
 
+[`test/e2e/drive-swap.mjs`](test/e2e/drive-swap.mjs) drives the swap of BTC
+for an asset in two installs of the app, P giving the asset and Q giving the
+BTC, against arca's operator harness run with a SeqLN node in X
+(`ARCA_OPERATOR_LIGHTNING=1` and `LIGHTNINGD_EXEC`) and a Bitcoin ark on
+regtest. Both join the operator and the ark; P boards X and Q boards BTC.
+P makes an offer in the Swap screen and sees what it gives and gets with
+every fee; Q reads it, sees its own, and takes it; P completes it; the apps
+then run the swap on their own (P's lock, the round of Q's leaf, Q's payment,
+P's claim, Q's claim of the leaf), and the drive checks both sides' books to
+the satoshi and the atom and one preimage on both sides. Then an abandoned
+swap: Q's app is closed right after it takes, so it never takes its leaf up
+or pays, and P's asset comes back once the operator fails the receive back.
+
+```
+# the operator harness as arca's bark-cli/README.md says, with ARCA_OPERATOR_LIGHTNING=1 and LIGHTNINGD_EXEC
+ARCA_OPERATOR_CONTROL=127.0.0.1:18640 ARCA_BITCOIN_ARK=/path/to/ark.sh npm run drive:swap -- test-results/drive-swap
+```
+
 The drives render the window offscreen (`ARCA_CLIENT_OFFSCREEN=1`), so it
 shows nothing on the screen of the machine it runs on. `ARCA_CLIENT_APP`
 points it at a packaged app's executable instead of this checkout.
@@ -242,6 +275,7 @@ src/main/arca.js        the manager: runs arca once per command
 src/main/commands.js    the wallet commands a window may ask for, as arguments
 src/main/scheduler.js   syncs on the wallet's schedule while the app runs
 src/main/bitcoin.js     the Bitcoin side's commands, as arguments
+src/main/swap.js        the swap of BTC for an asset: its commands, as arguments
 src/main/rails.js       the chains the wallet holds coins on
 src/main/node-rpc.js    JSON-RPC to Sequentia Core, for the node test
 src/main/config.js      the app's settings
@@ -253,7 +287,7 @@ build/BARK_COMMIT       the upstream Bark release the app carries
 build/bark-testnet4.patch   the one patch on it: testnet4
 build/make-bark-bundle.sh   builds and stages bark and barkd from that release
 build/make-icon.js      draws build/icon.png
-test/                   unit tests, the stand-in arca, and the drive
+test/                   unit tests, the stand-in arca, and the drives
 ```
 
 ## License

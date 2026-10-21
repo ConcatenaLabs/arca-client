@@ -10,6 +10,7 @@ const { btcArgv, btcTotal } = require('./bitcoin');
 const { nodeRpc, checkNode } = require('./node-rpc');
 const { loadConfig, saveConfig, defaultConfig } = require('./config');
 const { argv } = require('./commands');
+const { swapArgv, activeSwaps } = require('./swap');
 
 // ARCA_CLIENT_HOME moves every file the app writes (its settings and the
 // wallet's directory) under one directory: a second profile on one machine,
@@ -97,6 +98,7 @@ function makeRunner() {
   if (old) old.stop();
   stopClaim('the wallet changed');
   if (btcTimer) clearInterval(btcTimer);
+  if (swapTimer) clearTimeout(swapTimer);
   runner = new ArcaRunner({
     bin: arcaBin(), datadir: datadir(), env: barkEnv(),
     witnessPatience: process.env.ARCA_CLIENT_WITNESS_PATIENCE ? Number(process.env.ARCA_CLIENT_WITNESS_PATIENCE) : null,
@@ -118,6 +120,7 @@ function makeRunner() {
   setTimeout(maintain, 5000).unref();
   btcTimer = setInterval(maintain, Number(process.env.ARCA_CLIENT_BITCOIN_MAINTAIN_MS || 0) || 1800000);
   btcTimer.unref();
+  swapArm(3000);
 }
 
 // One Bitcoin command on its queue: Bark's answer, or its refusal verbatim.
@@ -174,6 +177,61 @@ function startClaim(invoice, amount) {
   stopClaim('a new claim started');
   claim = { invoice, amount, since: Date.now(), state: 'waiting', history: [], stop: null };
   runClaim(claim).catch((e) => { if (claim) { claim.state = 'refused'; claim.history.push({ at: Date.now(), state: 'refused', refusal: { kind: 'client', message: e.message } }); } });
+}
+
+// --- the swap of BTC for an asset ------------------------------------------------
+// A run of `arca btc-swap` opens the Arca wallet and Bark's: it waits for the
+// Arca queue to be free, holds it, and runs on the Bitcoin queue, so no other
+// run meets it in either wallet.
+async function swapCall(command, a = {}) {
+  let args;
+  try { args = swapArgv(command, a); } catch (e) { return { ok: false, refusal: { kind: 'input', message: e.message }, notes: [] }; }
+  const deadlineMs = command === 'follow' ? (Number(a.wait || 0) + Number(a.claim_slice || 15) + 600) * 1000 : 600000;
+  try {
+    const { result, notes } = await runner.hold(() => btcRunner.run(args, { deadlineMs }));
+    return { ok: true, result, notes };
+  } catch (e) {
+    return { ok: false, refusal: e.refusal || { kind: 'client', message: e.message }, notes: e.notes || [] };
+  }
+}
+
+// The follow loop. While a swap is under way, `btc-swap follow` runs again a
+// few seconds after each run ends: the giver of the asset must be claiming
+// its BTC when the payer pays, since Bark's server fails a payment back that
+// the receiver does not claim within its forward timeout, and each run claims
+// for one slice of 15 seconds. With none under way, the swaps are read every
+// five minutes.
+let swapTimer = null;
+let swapActive = 0;
+let swapRunning = false;
+const SWAP_ACTIVE_MS = Number(process.env.ARCA_CLIENT_SWAP_ACTIVE_MS || 0) || 3000;
+const SWAP_IDLE_MS = Number(process.env.ARCA_CLIENT_SWAP_IDLE_MS || 0) || 300000;
+function swapArm(ms) {
+  if (swapTimer) clearTimeout(swapTimer);
+  swapTimer = setTimeout(() => { swapTick().catch(() => swapArm(SWAP_IDLE_MS)); }, ms);
+  if (swapTimer.unref) swapTimer.unref();
+}
+async function swapTick() {
+  swapTimer = null;
+  if (swapRunning) return;
+  if (!runner || !runner.exists() || !btcWallet()) { swapArm(SWAP_IDLE_MS); return; }
+  swapRunning = true;
+  try {
+    const list = await swapCall('list');
+    if (list.ok) swapActive = activeSwaps(list.result).length;
+    if (swapActive > 0) {
+      const out = await swapCall('follow', { wait: 0, claim_slice: 15 });
+      send('swap-event', { type: 'followed', at: Date.now(), out });
+      const again = await swapCall('list');
+      if (again.ok) {
+        swapActive = activeSwaps(again.result).length;
+        send('swap-event', { type: 'list', at: Date.now(), list: again.result });
+      }
+    }
+  } finally {
+    swapRunning = false;
+  }
+  swapArm(swapActive > 0 ? SWAP_ACTIVE_MS : SWAP_IDLE_MS);
 }
 
 // Every call the renderer makes to the wallet goes through here: the answer,
@@ -251,6 +309,14 @@ ipcMain.handle('btc-claim', async (_e, a) => {
   return { ok: true, result: claimState() };
 });
 ipcMain.handle('btc-claim-stop', async () => { stopClaim('stopped by the user'); return { ok: true, result: claimState() }; });
+// The swap of BTC for an asset: an offer, a take or a completion starts the
+// follow loop at once.
+ipcMain.handle('swap', async (_e, command, a) => {
+  const out = await swapCall(command, a || {});
+  if (out.ok && ['offer', 'take', 'complete', 'cancel'].includes(command)) swapArm(500);
+  return out;
+});
+ipcMain.handle('swap-status', () => ({ active: swapActive, running: swapRunning }));
 ipcMain.handle('set-auto-sync', (_e, on) => {
   const c = cfg(); c.autoSync = !!on; save();
   if (c.autoSync && runner.exists()) scheduler.start(); else scheduler.stop();
@@ -351,6 +417,7 @@ if (!app.requestSingleInstanceLock()) {
     if (scheduler) scheduler.stop();
     stopClaim('the app is stopping');
     if (btcTimer) clearInterval(btcTimer);
+    if (swapTimer) clearTimeout(swapTimer);
     Promise.race([Promise.all([runner ? runner.stop(20000) : Promise.resolve(), btcRunner ? btcRunner.stop(40000) : Promise.resolve()]),
       new Promise((r) => setTimeout(r, 45000))])
       .finally(() => app.exit(0));
