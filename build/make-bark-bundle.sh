@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Builds Bark's client, `bark`, and its daemon, `barkd`, from the upstream
 # release pinned in build/BARK_COMMIT, with one patch, build/bark-testnet4.patch,
-# and stages them for the app to carry beside `arca`:
+# and stages them for the app to carry beside `arca`; on Linux also Bark's
+# server, `captaind`, and its watchman, `watchmand`, which the Deploy screen
+# runs for a Bitcoin ark:
 #
 #   build/bark-linux-x64/          (TARGET=x86_64-unknown-linux-gnu, the default)
 #   build/bark-win-x64/            (TARGET=x86_64-pc-windows-msvc, on Windows)
 #     bin/bark[.exe] bin/barkd[.exe]   stripped
+#     bin/captaind bin/watchmand       Bark's server and watchman (Linux only)
 #     VERSION          the Bark commit, the patch's SHA-256, the target, the compiler
 #     LICENSE          Bark's license
 #
@@ -43,8 +46,8 @@ BARK_REPO="${BARK_REPO:-https://gitlab.com/ark-bitcoin/bark.git}"
 TARGET="${TARGET:-x86_64-unknown-linux-gnu}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 case "$TARGET" in
-  x86_64-unknown-linux-gnu) OUT="$HERE/bark-linux-x64"; X= ;;
-  x86_64-pc-windows-gnu|x86_64-pc-windows-msvc) OUT="$HERE/bark-win-x64"; X=.exe ;;
+  x86_64-unknown-linux-gnu) OUT="$HERE/bark-linux-x64"; X=; SERVER="captaind watchmand" ;;
+  x86_64-pc-windows-gnu|x86_64-pc-windows-msvc) OUT="$HERE/bark-win-x64"; X=.exe; SERVER= ;;
   *) echo "unsupported TARGET $TARGET" >&2; exit 1 ;;
 esac
 
@@ -81,18 +84,21 @@ if [ -n "${CARGO_TARGET_DIR:-}" ]; then REMAP="$REMAP --remap-path-prefix=$CARGO
 export RUSTFLAGS="${RUSTFLAGS:-} $REMAP"
 export CARGO_PROFILE_RELEASE_STRIP=symbols CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_INCREMENTAL=0
 ( cd "$BARK_SRC" && cargo build --release --locked --target "$TARGET" -p bark-cli --bin bark --bin barkd )
+if [ -n "$SERVER" ]; then
+  ( cd "$BARK_SRC" && cargo build --release --locked --target "$TARGET" -p bark-server --bin captaind --bin watchmand )
+fi
 TDIR="${CARGO_TARGET_DIR:-$BARK_SRC/target}"
 
 echo "=== stage $OUT ==="
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
-for b in bark barkd; do cp "$TDIR/$TARGET/release/$b$X" "$OUT/bin/$b$X"; done
+for b in bark barkd $SERVER; do cp "$TDIR/$TARGET/release/$b$X" "$OUT/bin/$b$X"; done
 cp "$BARK_SRC/LICENSE" "$OUT/LICENSE"
 printf 'bark %s\npatch bark-testnet4.patch sha256 %s\ntarget %s\n%s\n' "$FULL" "$PATCH_SHA256" "$TARGET" "$(rustc --version)" > "$OUT/VERSION"
 
 echo "=== check: no build path in the binaries ==="
 bad=0
-for b in bark barkd; do
+for b in bark barkd $SERVER; do
   for p in "$BARK_SRC" "$HOME" "$CARGO_HOME_DIR" "$RUSTUP_HOME_DIR" ${CARGO_TARGET_DIR:+"$CARGO_TARGET_DIR"}; do
     n="$(grep -a -c -F -- "$p" "$OUT/bin/$b$X" || true)"
     if [ "$n" != 0 ]; then echo "$b holds $p ($n lines)" >&2; bad=1; fi
@@ -103,6 +109,8 @@ if [ -z "$X" ]; then
   "$OUT/bin/bark" --version
   "$OUT/bin/bark" create --help | grep -q -- '--testnet4' || { echo "this bark has no --testnet4" >&2; exit 1; }
   "$OUT/bin/barkd" --help > /dev/null
+  "$OUT/bin/captaind" --version
+  "$OUT/bin/watchmand" --help > /dev/null
 fi
 ls -l "$OUT/bin"
 cat "$OUT/VERSION"

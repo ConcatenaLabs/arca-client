@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Builds the Arca command-line client, `arca`, from ConcatenaLabs/arca at the
-# commit pinned in build/ARCA_COMMIT, and stages it for the app to carry:
+# commit pinned in build/ARCA_COMMIT, and stages it for the app to carry; on
+# Linux also the operator's server, `arcad`, and its signer, `arca-signer`,
+# which the Deploy screen runs (both are Unix programs: the signer listens on
+# a Unix socket and the server reloads on SIGHUP):
 #
 #   build/arca-linux-x64/          (TARGET=x86_64-unknown-linux-gnu, the default)
 #   build/arca-win-x64/            (TARGET=x86_64-pc-windows-gnu, or -msvc on Windows)
 #     bin/arca[.exe]   the client, stripped
+#     bin/arcad bin/arca-signer   the operator's server and signer (Linux only)
 #     VERSION          the arca commit, the target and the compiler
 #     LICENSE          arca's license
 #
@@ -27,8 +31,8 @@ ARCA_SRC="${ARCA_SRC:-$HERE/cache/arca}"
 TARGET="${TARGET:-x86_64-unknown-linux-gnu}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 case "$TARGET" in
-  x86_64-unknown-linux-gnu) OUT="$HERE/arca-linux-x64"; EXE=arca ;;
-  x86_64-pc-windows-gnu|x86_64-pc-windows-msvc) OUT="$HERE/arca-win-x64"; EXE=arca.exe ;;
+  x86_64-unknown-linux-gnu) OUT="$HERE/arca-linux-x64"; EXE=arca; SERVER="arcad arca-signer" ;;
+  x86_64-pc-windows-gnu|x86_64-pc-windows-msvc) OUT="$HERE/arca-win-x64"; EXE=arca.exe; SERVER= ;;
   *) echo "unsupported TARGET $TARGET" >&2; exit 1 ;;
 esac
 
@@ -58,6 +62,9 @@ if [ -n "${CARGO_TARGET_DIR:-}" ]; then REMAP="$REMAP --remap-path-prefix=$CARGO
 export RUSTFLAGS="${RUSTFLAGS:-} $REMAP"
 export CARGO_PROFILE_RELEASE_STRIP=symbols CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_INCREMENTAL=0
 ( cd "$ARCA_SRC" && cargo build --release --locked --target "$TARGET" -p arca-cli --bin arca )
+for b in $SERVER; do
+  ( cd "$ARCA_SRC" && cargo build --release --locked --target "$TARGET" -p arca-server --bin "$b" )
+done
 TDIR="${CARGO_TARGET_DIR:-$ARCA_SRC/target}"
 BIN="$TDIR/$TARGET/release/$EXE"
 
@@ -65,20 +72,27 @@ echo "=== stage $OUT ==="
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
 cp "$BIN" "$OUT/bin/$EXE"
+for b in $SERVER; do cp "$TDIR/$TARGET/release/$b" "$OUT/bin/$b"; done
 cp "$ARCA_SRC/LICENSE" "$OUT/LICENSE"
 printf 'arca %s\ntarget %s\n%s\n' "$FULL" "$TARGET" "$(rustc --version)" > "$OUT/VERSION"
 
 echo "=== check: no build path in the binary ==="
 bad=0
-for p in "$ARCA_SRC" "$HOME" "$CARGO_HOME_DIR" "$RUSTUP_HOME_DIR" ${CARGO_TARGET_DIR:+"$CARGO_TARGET_DIR"}; do
-  n="$(grep -a -c -F -- "$p" "$OUT/bin/$EXE" || true)"
-  if [ "$n" != 0 ]; then echo "the binary holds $p ($n lines)" >&2; bad=1; fi
+for b in "$EXE" $SERVER; do
+  for p in "$ARCA_SRC" "$HOME" "$CARGO_HOME_DIR" "$RUSTUP_HOME_DIR" ${CARGO_TARGET_DIR:+"$CARGO_TARGET_DIR"}; do
+    n="$(grep -a -c -F -- "$p" "$OUT/bin/$b" || true)"
+    if [ "$n" != 0 ]; then echo "$b holds $p ($n lines)" >&2; bad=1; fi
+  done
 done
 [ "$bad" = 0 ]
 if [ "$TARGET" = x86_64-unknown-linux-gnu ]; then
   "$OUT/bin/$EXE" --help > /dev/null
   "$OUT/bin/$EXE" --help | grep -q '^  schedule' || { echo "this arca has no schedule command: pin a newer commit" >&2; exit 1; }
+  said="$("$OUT/bin/arca-signer" --key-file /nonexistent --pubkey 2>&1 || true)"
+  case "$said" in *nonexistent*) ;; *) echo "arca-signer does not run: $said" >&2; exit 1 ;; esac
+  said="$("$OUT/bin/arcad" 2>&1 || true)"
+  case "$said" in *usage:\ arcad*) ;; *) echo "arcad does not run: $said" >&2; exit 1 ;; esac
 fi
-ls -l "$OUT/bin/$EXE"
+ls -l "$OUT/bin"
 cat "$OUT/VERSION"
 echo "STAGED OK -> $OUT"

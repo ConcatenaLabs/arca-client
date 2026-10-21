@@ -1,7 +1,8 @@
 # Arca client
 
 A desktop app for Linux and Windows. You join an Arca operator with it and use
-the operator as a wallet. The wallet is dual-chain:
+the operator as a wallet, and on Linux you can run an operator with it too
+(Deploy, below). The wallet is dual-chain:
 
 - every Sequentia asset, held as Arca coins (leaves of the operator's covenant
   trees) and as on-chain coins;
@@ -50,9 +51,9 @@ a default.
 
 | Screen | What it does |
 | --- | --- |
-| Join | Tests the node, takes the operator's address, and creates a wallet or restores one from its mnemonic. It shows the operator key the wallet pins. Compare that key with the one the operator publishes through a channel you trust. A new wallet's mnemonic is shown once, to write down |
+| Join | Tests the node, takes the operator's address, and creates a wallet or restores one from its mnemonic. It shows the operator key the wallet pins. Compare that key with the one the operator publishes through a channel you trust; or give that key beside the address, and the app keeps the wallet only when the server shows it (a wallet made against another key is removed before anything is boarded). A new wallet's mnemonic is shown once, to write down |
 | Wallet | The total, then one row per holding: BTC, in the Bitcoin ark and on-chain, then each Sequentia asset, split into on-chain and Arca coins by state |
-| Bitcoin | The Bitcoin side. **Join a Bitcoin ark**: the network (testnet4 by default), the ark's server (the operator's, when it names one) and the chain source; the Bitcoin ark wallet is made from this wallet's own mnemonic. Then: what it holds; **board**, with the server's fee shown first; **send** to an Ark or Bitcoin address, or pay a Lightning invoice; **receive** at an Ark address, or over Lightning, where the app claims the payment the moment it arrives; **refresh** every leaf; and the **exit**, every leaf to the chain alone, then claimed to the on-chain wallet |
+| Bitcoin | The Bitcoin side. **Join a Bitcoin ark**: the network (testnet4 by default), the ark's server (the operator's, when it names one), optionally its server key (the wallet is then made only against a server that shows it) and the chain source; the Bitcoin ark wallet is made from this wallet's own mnemonic. Then: what it holds; **board**, with the server's fee shown first; **send** to an Ark or Bitcoin address, or pay a Lightning invoice; **receive** at an Ark address, or over Lightning, where the app claims the payment the moment it arrives; **refresh** every leaf; and the **exit**, every leaf to the chain alone, then claimed to the on-chain wallet |
 | Board | A new on-chain address to pay, and boarding: on-chain coins brought into Arca. The board's fee, size and the coins it spends are shown before anything is signed. A board is spendable once its transaction is final |
 | Send | Pays a receive request out of round. The asset is the one the request names, or the one you name. There is no default asset |
 | Receive | Makes a request for one payment, shown and copied. It lapses 27 days after it is made. The screen also lists the requests still waiting for a payment |
@@ -61,7 +62,8 @@ a default.
 | Schedule | When the wallet must next sync (`next_sync_at`, the chain's median time) and why, each coin's dates, and the syncs this run of the app made |
 | Exit drill | Takes a coin to the chain from its record alone, without the operator. Each run shows what it would broadcast and at what fee, then goes as far as the chain allows: the unroll, then the claim once the exit delay has run |
 | Refusals | Every refusal, in the wallet's own words: those of this session, and the wallet's own record |
-| Settings | The node and operator the wallet pinned, the client in use, and the log of every run of `arca` |
+| Deploy | Developer mode only. Runs an Arca operator and a Bitcoin ark on this machine; see [Running an operator](#running-an-operator) |
+| Settings | The node and operator the wallet pinned, the client in use, developer mode (on by default; it shows Deploy), and the log of every run of `arca` |
 
 While the app runs, it keeps the wallet synced on the wallet library's own
 schedule. It reads `arca schedule` every two minutes and runs `arca sync`
@@ -102,6 +104,103 @@ A swap left unattended ends by its refunds: the asset comes back to its
 giver once the operator fails the receive back, days later, and the BTC to
 its payer once Bark fails the payment back.
 
+## Running an operator
+
+In developer mode the Deploy screen runs an operator on your machine, on
+either chain. It works on Linux, where the app carries the daemons.
+
+**What it commits you to.** The screen says it first, and it is the point:
+
+- **Funds in its pools.** Every round is funded from the operator's own coins
+  of its asset. You pay each asset you serve into the operator's wallet, and
+  those coins stay locked in batches until they expire and are swept back,
+  weeks later. A Bitcoin ark's rounds are funded the same way, in BTC.
+- **Staying online.** The operator co-signs every payment and refresh, and
+  its watcher answers a stale exit on the chain. While it is down, its holders
+  can only take their coins home on the chain by themselves.
+- **The exit deadlines its holders rely on.** A holder refreshes or exits each
+  coin before its exit deadline, three days before its batch expires. Keep the
+  operator running, and announce any end of service far ahead of them.
+- **No keepers.** The signer's record is made without keepers. That suits an
+  operator holding its own coins, and trials. An operator holding other
+  people's coins runs with three keepers on machines of their own, as arca's
+  [operator procedure](https://github.com/ConcatenaLabs/arca/blob/master/doc/operator-procedure.md)
+  says; Deploy does not set them up.
+
+**The database.** Both operators keep their state in a PostgreSQL cluster of
+the app's own, which it makes, starts and stops. It runs PostgreSQL's server
+programs installed on the machine (`apt install postgresql`): the app looks in `/usr/lib/postgresql/*/bin` and on the `PATH`,
+or uses the directory you name. The cluster listens on 127.0.0.1 alone, on the
+port you choose (25432 unless you change it before it is made), with no Unix
+socket; every role logs in with a password the app draws. Its durability
+settings are PostgreSQL's defaults, and every commit is archived as it is
+written: each WAL segment is copied into the backup directory you name. Put
+that directory on other storage than the machine's disk.
+
+**On Sequentia: an Arca operator.** The app runs `arcad` and `arca-signer`,
+built from arca at the commit in [`build/ARCA_COMMIT`](build/ARCA_COMMIT),
+the same as the `arca` it carries. You give:
+
+- your Sequentia Core node (with `-txindex` and `-validateanchor`), tested
+  from the screen;
+- the listen address of `arcad`, and the route: the address wallets reach it
+  at. For anyone but this machine that is a reverse proxy in front of it with
+  TLS, since the wallet refuses plain `http://` except to its own machine;
+- the exit delays, the specification's 36 to 48 hours (254 to 338 units of
+  512 seconds) unless you change them; how often a round is built; the fees;
+- the assets served. None is served until you list it, each with its
+  smallest leaf, its own fees if you set them, and where its rate comes from:
+  the node's own rate, a file your price process writes, or a command, or no
+  rate at all. They are served in the order you list them.
+
+"Make the operator" draws the operator key `S` and the operator wallet's
+mnemonic on this machine and makes the signer's record, once. "Start" starts
+the database, the signer and `arcad`, writing `arcad.toml` from your settings.
+"Reload assets and fees" writes it again and sends `arcad` SIGHUP: an asset
+added, or a fee or rate source changed, is taken without a restart. Any other
+change takes a stop and a start. "A funding address" hands out an address of
+the operator's wallet, where you pay each asset's pool. The screen shows the
+key and the route to give wallets, `GET /v1/info` as the operator publishes
+it, the signer's record and its entries, and each daemon's log.
+
+**On Bitcoin: a Bitcoin ark.** The app runs Bark's server, `captaind`, and its
+watchman, `watchmand`, from the Bark release it carries, against your Bitcoin
+Core. Bark's server at that release needs **Bitcoin Core 31 or later** with
+`-txindex`; the screen tests it and refuses an older one. You choose the
+network, the listen address and admin port, the route, the round interval,
+how long a leaf lives, how long an exit waits, the confirmations a board
+needs and the board and leaf bounds; the rest follows Bark's own fee schedule.
+The ark runs without a Lightning gateway, so it takes no Lightning payments.
+"Make the ark" has `captaind` draw its key; "Start" starts it and the
+watchman, which sweeps to the round wallet's address. The screen shows the
+server key and the route to give wallets, and the round wallet's address and
+balance: fund it, since the rounds are paid from it.
+
+**The daemons outlive the app.** They run in sessions of their own, so
+closing the app stops none of them; the app finds them again at its next start
+by the PIDs it wrote down. They run from copies the app installs in the
+profile (`deploy/bin/`, one directory per binary's hash), never from inside
+the app: an AppImage's files go away when it quits, and so would a daemon
+still running from them. Stop them from the screen: `arcad` on SIGINT, the
+signer on SIGTERM, the ark's daemons on SIGTERM, PostgreSQL on its fast
+shutdown, each waited for.
+
+**Backup.** "Back up now" writes, into the backup directory, each operator's
+secrets (the operator key, the operator wallet's mnemonic, `captaind`'s
+mnemonic) and its configuration, with a note of what each is, and a base
+backup of the database, which the WAL archived there since completes. A
+restore of the database is to its latest commit: that base backup with every
+segment after it. The signer's record is never in a backup and never restored
+from a copy: a record cut back signs nothing.
+
+| What | Where |
+| --- | --- |
+| The database cluster and its passwords | `~/.arca-client/deploy/postgres/` |
+| The Arca operator: `secrets/operator.key`, `secrets/wallet.mnemonic`, `signer/signer.record`, `arcad.toml`, `log/` | `~/.arca-client/deploy/sequentia/` |
+| The Bitcoin ark: `captaind/mnemonic`, `captaind.toml`, `watchmand.toml`, `log/` | `~/.arca-client/deploy/bitcoin/` |
+| The daemons' binaries, as installed | `~/.arca-client/deploy/bin/` |
+| Backups, and the database's archived WAL | `~/.arca-client/deploy/backup/`, or the directory you name |
+
 ## Where your data lives
 
 | What | Where |
@@ -116,7 +215,8 @@ every on-chain coin. Join the Bitcoin ark again from the restored wallet to
 restore the Bitcoin side: the ark's server hands back its leaves, and the
 on-chain wallet is scanned from the height you give (empty: from now).
 
-`ARCA_CLIENT_HOME` moves both under one directory, for a second profile.
+`ARCA_CLIENT_HOME` moves all of it, Deploy's directories included, under one
+directory, for a second profile.
 
 ### Attaching to a wallet you already run
 
@@ -169,23 +269,25 @@ Requires Node.js 22 and, for the client, a Rust toolchain and `protoc`
 
 ```
 npm install
-npm run bundle:arca     # builds arca at build/ARCA_COMMIT into build/arca-linux-x64
-npm run bundle:bark     # builds bark and barkd at build/BARK_COMMIT, patched, into build/bark-linux-x64
+npm run bundle:arca     # builds arca (and on Linux arcad, arca-signer) at build/ARCA_COMMIT into build/arca-linux-x64
+npm run bundle:bark     # builds bark and barkd (and on Linux captaind, watchmand) at build/BARK_COMMIT, patched, into build/bark-linux-x64
 npm start               # the app from this checkout, with those clients
 ```
 
 `build/make-arca-bundle.sh` clones arca into `build/cache/arca` unless
 `ARCA_SRC` names a clean clone. It checks out the pinned commit and builds
-`arca` in release mode, with every build path mapped away. It then checks
-that the binary names no directory of the machine that built it.
+`arca` in release mode, and on Linux the operator's `arcad` and
+`arca-signer`, with every build path mapped away. It then checks that the
+binaries name no directory of the machine that built them.
 `TARGET=x86_64-pc-windows-gnu` builds the Windows client into
 `build/arca-win-x64`.
 
 `build/make-bark-bundle.sh` does the same for Bark: it clones Bark's upstream
 repository into `build/cache/bark` unless `BARK_SRC` names a clone, checks out
 the pinned release, applies the patch (checked against its SHA-256 in the
-script), builds `bark` and `barkd` with every build path mapped away, and
-checks the binaries name none. A release puts them beside `arca`.
+script), builds `bark` and `barkd`, and on Linux Bark's `captaind` and
+`watchmand`, with every build path mapped away, and checks the binaries name
+none. A release puts them beside `arca`.
 
 ```
 npm run dist:linux      # dist/Arca-<version>-linux-x86_64.AppImage
@@ -263,6 +365,30 @@ or pays, and P's asset comes back once the operator fails the receive back.
 ARCA_OPERATOR_CONTROL=127.0.0.1:18640 ARCA_BITCOIN_ARK=/path/to/ark.sh npm run drive:swap -- test-results/drive-swap
 ```
 
+[`test/e2e/drive-deploy.mjs`](test/e2e/drive-deploy.mjs) drives the Deploy
+screen in two installs: the runner and a wallet. On Sequentia, the runner
+starts a second operator on the operator harness's chain, refused first with
+no asset named, then with two assets of its choosing; it funds the pools at
+the address the screen hands out. The wallet joins from the key and route
+the screen shows (refused, and its wallet removed, under another key), boards,
+pays a command-line wallet and refreshes. With a payment unread, a board not
+yet final and a refresh whose round is broadcast, the runner stops the
+operator and starts it again; the drive checks that everything completes and
+nothing is lost, that the operator outlives the runner's app and is found
+again by its PIDs, its record, its logs, and a backup. On Bitcoin, the drive
+starts Bitcoin Core 31 (and a Core 28 the screen must refuse); the runner
+makes and starts a Bitcoin ark and funds its round wallet; the wallet's
+Bitcoin side joins it from its server key and route, boards, pays a
+command-line Bark wallet and refreshes; the ark is stopped and started with a
+payment and a board in flight, and both arrive.
+
+```
+# the operator harness as above; PostgreSQL's programs; Bitcoin Core 31 (and 28) bin directories
+ARCA_OPERATOR_CONTROL=127.0.0.1:18640 DEPLOY_PG_BIN=/usr/lib/postgresql/16/bin \
+  DEPLOY_CORE_BIN=/path/to/bitcoin-31.1/bin DEPLOY_CORE28_BIN=/path/to/bitcoin-28.0/bin \
+  npm run drive:deploy -- test-results/drive-deploy
+```
+
 The drives render the window offscreen (`ARCA_CLIENT_OFFSCREEN=1`), so it
 shows nothing on the screen of the machine it runs on. `ARCA_CLIENT_APP`
 points it at a packaged app's executable instead of this checkout.
@@ -277,7 +403,13 @@ src/main/scheduler.js   syncs on the wallet's schedule while the app runs
 src/main/bitcoin.js     the Bitcoin side's commands, as arguments
 src/main/swap.js        the swap of BTC for an asset: its commands, as arguments
 src/main/rails.js       the chains the wallet holds coins on
-src/main/node-rpc.js    JSON-RPC to Sequentia Core, for the node test
+src/main/node-rpc.js    JSON-RPC to Sequentia Core (and Bitcoin Core), for the node tests
+src/main/deploy.js      Deploy: the operator and the Bitcoin ark the app runs
+src/main/operator.js    the Arca operator: arcad, arca-signer, their settings
+src/main/ark-server.js  the Bitcoin ark: captaind, watchmand, their settings
+src/main/postgres.js    the PostgreSQL cluster both keep their state in
+src/main/daemon.js      a daemon started, found again and stopped
+src/main/secrets.js     the keys and mnemonics Deploy draws
 src/main/config.js      the app's settings
 src/main/preload.js     the only API the window sees (window.arca)
 src/renderer/           the screens

@@ -61,7 +61,8 @@ jobs:
         run: |
           set -euo pipefail
           app=$(ls dist/Arca-*-linux-x86_64.AppImage)
-          for b in build/arca-linux-x64/bin/arca build/bark-linux-x64/bin/bark build/bark-linux-x64/bin/barkd; do
+          for b in build/arca-linux-x64/bin/arca build/arca-linux-x64/bin/arcad build/arca-linux-x64/bin/arca-signer \
+                   build/bark-linux-x64/bin/bark build/bark-linux-x64/bin/barkd build/bark-linux-x64/bin/captaind build/bark-linux-x64/bin/watchmand; do
             for p in "$GITHUB_WORKSPACE" "$HOME/.cargo" "$HOME/.rustup"; do
               n=$(grep -a -c -F -- "$p" "$b" || true)
               [ "$n" = 0 ] || { echo "$b holds $p"; exit 1; }
