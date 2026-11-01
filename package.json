@@ -1,7 +1,7 @@
 {
   "name": "arca-client",
   "productName": "Arca",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The Arca client: a desktop app to join an Arca operator and use it as a dual-chain wallet, every Sequentia asset as Arca coins and BTC in a Bitcoin ark. It carries the Arca command-line client and Bark's client.",
   "author": "Concatena Labs",
   "license": "MIT",
