@@ -70,3 +70,39 @@ test('Bark named or beside arca installs the Bitcoin rail', () => {
     assert.match(r[0].note, /Native BTC in a Bitcoin ark/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// arca-client#10: BTC is renewed with the app closed. Each coin with no
+// delegated refresh pending gets one, grouped by expiry, 72 blocks before it;
+// Bark's command line schedules a coin twice if asked twice, so the plan
+// skips what `round list` shows pending.
+test('renewals are planned per expiry, once per coin', () => {
+  const { renewalPlan, btcArgv } = require('../src/main/bitcoin');
+  const id = (n) => `${String(n).repeat(64).slice(0, 64)}:0`;
+  const v = (n, expiry, type = 'spendable') => ({ id: id(n), expiry_height: expiry, state: { type } });
+  const vtxos = [v(1, 2497), v(2, 2497), v(3, 2600), v(4, 2600, 'locked'), v(5, 2700)];
+  const rounds = [{ state: 'delegated-pending', participation: { inputs: [id(5)] } }, { state: 'finished', participation: { inputs: [id(3)] } }];
+  assert.deepEqual(renewalPlan(vtxos, rounds), [{ height: 2425, vtxos: [id(1), id(2)] }, { height: 2528, vtxos: [id(3)] }]);
+  assert.deepEqual(renewalPlan([], []), []);
+  assert.deepEqual(btcArgv('schedule_refresh', { height: 2425, vtxos: [id(1), id(2)] }),
+    ['bitcoin', '--quiet', 'refresh', '--delegated', '--height', '2425', '--vtxo', id(1), '--vtxo', id(2)]);
+  assert.throws(() => btcArgv('schedule_refresh', { height: 2425, vtxos: ['nope'] }), /the coins/);
+  assert.throws(() => btcArgv('schedule_refresh', { height: 'x', vtxos: [id(1)] }), /the height/);
+  assert.deepEqual(btcArgv('round_list'), ['bitcoin', '--quiet', 'round', 'list']);
+});
+
+// Bark 0.7.1 counts a scheduled renewal "in a round" beside the coin it
+// renews; the client takes it off, so BTC's row is not counted twice.
+test('a scheduled renewal is not BTC on top', () => {
+  const { scheduledAhead, btcTotal } = require('../src/main/bitcoin');
+  const id = (n) => `${String(n).repeat(64).slice(0, 64)}:0`;
+  const vtxos = [{ id: id(1), state: { type: 'spendable' } }, { id: id(2), state: { type: 'spent' } }];
+  const rounds = [
+    { state: 'delegated-pending', participation: { inputs: [id(1)], outputs: [{ amount_sat: 149370 }] } },
+    { state: 'delegated-pending', participation: { inputs: [id(2)], outputs: [{ amount_sat: 5000 }] } },
+    { state: 'ongoing', participation: { inputs: [id(1)], outputs: [{ amount_sat: 7 }] } },
+  ];
+  assert.equal(scheduledAhead(vtxos, rounds), 149370);
+  // As the summary hands it on: Bark's 149,520 + 149,370 becomes 149,520.
+  const ark = { spendable_sat: 149520, pending_in_round_sat: 0, renewal_scheduled_sat: 149370 };
+  assert.equal(btcTotal(ark, { total_sat: 0 }), 149520);
+});

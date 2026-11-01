@@ -87,8 +87,13 @@ the payment's arrival and the claim, the claim is too late; the app then
 shows a fresh invoice of the same amount for the payer to pay instead, and
 the first payment goes back to the payer. "Stop waiting" ends the claim, and
 "Claim now" starts it again. While the app runs, it also has Bark refresh
-leaves near their expiry, every half hour. A build that does not carry Bark
-shows BTC's row, empty, saying so.
+leaves near their expiry, every half hour. After each of those passes, after
+a send or a refresh, and before it quits, it hands the ark's server a renewal
+of every leaf that has none yet, grouped by expiry (Bark's `refresh
+--delegated --height`, 72 blocks before the expiry), so BTC is renewed while
+the app is closed; the renewed leaf is taken in when the app next runs. A
+renewal scheduled this way is not counted as BTC on top of the leaf it
+renews. A build that does not carry Bark shows BTC's row, empty, saying so.
 
 A swap of BTC for an asset runs on its own once it is agreed: the giver of
 the asset locks it, the giver of the BTC pays once its leaf of the asset is
