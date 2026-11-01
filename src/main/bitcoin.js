@@ -21,6 +21,7 @@ const SATS = /^[0-9]{1,15}$/;
 // a Bitcoin address, a BIP-321 URI, a Lightning address.
 const DEST = /^[A-Za-z0-9:?=&%._+@/-]{8,2000}$/;
 const INVOICE = /^(lightning:)?ln[a-z0-9]{8,2000}$/i;
+const VTXO = /^[0-9a-f]{64}:[0-9]{1,5}$/;
 
 function btcArgv(command, a = {}) {
   const need = (ok, what) => { if (!ok) throw new Error(`${what} is not valid`); };
@@ -61,6 +62,15 @@ function btcArgv(command, a = {}) {
     }
     case 'refresh': return q('refresh', '--all');
     case 'maintain': return q('maintain');
+    case 'round_list': return q('round', 'list');
+    // A refresh Bark's server runs by itself in its first round from `height`,
+    // with the app closed (renewalPlan).
+    case 'schedule_refresh': {
+      need(/^[0-9]{1,9}$/.test(String(a.height)), 'the height');
+      const ids = Array.isArray(a.vtxos) ? a.vtxos.map(String) : [];
+      need(ids.length > 0 && ids.length <= 64 && ids.every((i) => VTXO.test(i)), 'the coins');
+      return q('refresh', '--delegated', '--height', String(a.height), ...ids.flatMap((i) => ['--vtxo', i]));
+    }
     case 'exit_estimate': return q('exit', 'estimate-fee', '--all');
     case 'exit_start': return q('exit', 'start', '--all');
     case 'exit_progress': return q('exit', 'progress');
@@ -97,7 +107,7 @@ function btcArgv(command, a = {}) {
 function btcTotal(ark, onchain) {
   if (!ark || !onchain) return null;
   let t = 0;
-  for (const [k, v] of Object.entries(ark)) if (k.endsWith('_sat') && Number.isFinite(v)) t += v;
+  for (const [k, v] of Object.entries(ark)) if (k.endsWith('_sat') && k !== 'renewal_scheduled_sat' && Number.isFinite(v)) t += v;
   if (!Number.isFinite(onchain.total_sat)) return null;
   return t + onchain.total_sat;
 }
@@ -111,4 +121,44 @@ function boardFee(info, sats) {
   return Math.max(f.min_fee_sat || 0, (f.base_fee_sat || 0) + Math.ceil((n * (f.ppm || 0)) / 1e6));
 }
 
-module.exports = { btcArgv, btcTotal, boardFee, NETWORKS };
+// The blocks before a coin's expiry at which its scheduled renewal runs: Bark's
+// own margin for the wallets that schedule them (bark-wasm's schedule_refreshes).
+const RENEW_MARGIN = 72;
+
+// The renewals to schedule with Bark's server so the BTC is renewed while the
+// app is closed: one per expiry, for the spendable coins (`vtxos`, Bark's
+// `vtxos`) with no delegated refresh pending yet (`rounds`, Bark's `round
+// list`). Bark's command line neither skips a coin already scheduled nor
+// cancels a scheduled refresh, so the plan does. -> [{height, vtxos}]
+function renewalPlan(vtxos, rounds, margin = RENEW_MARGIN) {
+  const scheduled = new Set();
+  for (const r of rounds || []) {
+    if (r && r.state === 'delegated-pending' && r.participation) for (const i of r.participation.inputs || []) scheduled.add(i);
+  }
+  const byExpiry = new Map();
+  for (const v of vtxos || []) {
+    if (!v || !v.state || v.state.type !== 'spendable' || scheduled.has(v.id) || !Number.isInteger(v.expiry_height)) continue;
+    if (!byExpiry.has(v.expiry_height)) byExpiry.set(v.expiry_height, []);
+    byExpiry.get(v.expiry_height).push(v.id);
+  }
+  return [...byExpiry.entries()].sort((a, b) => a[0] - b[0])
+    .map(([expiry, ids]) => ({ height: Math.max(0, expiry - margin), vtxos: ids }));
+}
+
+// What Bark counts "in a round" for renewals that have not run yet: the
+// outputs of each delegated refresh still pending whose coins are all still
+// spendable. Bark's balance counts both the coin and its scheduled renewal,
+// so this is taken off `pending_in_round_sat` before anything is added up.
+function scheduledAhead(vtxos, rounds) {
+  const spendable = new Set((vtxos || []).filter((v) => v && v.state && v.state.type === 'spendable').map((v) => v.id));
+  let n = 0;
+  for (const r of rounds || []) {
+    if (!r || r.state !== 'delegated-pending' || !r.participation) continue;
+    const ins = r.participation.inputs || [];
+    if (!ins.length || !ins.every((i) => spendable.has(i))) continue;
+    for (const o of r.participation.outputs || []) if (Number.isFinite(o.amount_sat)) n += o.amount_sat;
+  }
+  return n;
+}
+
+module.exports = { btcArgv, btcTotal, boardFee, renewalPlan, scheduledAhead, RENEW_MARGIN, NETWORKS };

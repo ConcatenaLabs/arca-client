@@ -6,7 +6,7 @@ const os = require('os');
 const { ArcaRunner } = require('./arca');
 const { SyncScheduler } = require('./scheduler');
 const { rails, barkBeside } = require('./rails');
-const { btcArgv, btcTotal } = require('./bitcoin');
+const { btcArgv, btcTotal, renewalPlan, scheduledAhead } = require('./bitcoin');
 const { nodeRpc, checkNode } = require('./node-rpc');
 const { loadConfig, saveConfig, defaultConfig } = require('./config');
 const { argv } = require('./commands');
@@ -137,12 +137,28 @@ function makeRunner() {
     onLog: (l) => send('log', `[bitcoin] ${l}`),
   });
   // Bark refreshes leaves before they expire when it is told to maintain the
-  // wallet: at the start and every half hour while the app runs.
-  const maintain = () => { if (btcWallet() && !claim) btcCall('maintain').catch(() => {}); };
+  // wallet: at the start and every half hour while the app runs. After each
+  // maintain, every coin with no renewal scheduled gets one the server runs
+  // by itself 72 blocks before its expiry, so BTC is renewed with the app
+  // closed too; the renewed coin is taken in at the next maintain.
+  const maintain = () => { if (btcWallet() && !claim) btcCall('maintain').then(() => scheduleRenewals()).catch(() => {}); };
   setTimeout(maintain, 5000).unref();
   btcTimer = setInterval(maintain, Number(process.env.ARCA_CLIENT_BITCOIN_MAINTAIN_MS || 0) || 1800000);
   btcTimer.unref();
   swapArm(3000);
+}
+
+// The renewals of coins that have none yet (renewalPlan), one per expiry.
+async function scheduleRenewals() {
+  const [v, r] = [await btcCall('vtxos'), await btcCall('round_list')];
+  if (!v.ok || !r.ok) return [];
+  const done = [];
+  for (const p of renewalPlan(v.result, r.result)) {
+    const out = await btcCall('schedule_refresh', p);
+    send('log', `[bitcoin] renewal at height ${p.height} for ${p.vtxos.length} coin(s): ${out.ok ? 'scheduled' : out.refusal.message}`);
+    if (out.ok) done.push(p);
+  }
+  return done;
 }
 
 // One Bitcoin command on its queue: Bark's answer, or its refusal verbatim.
@@ -326,7 +342,10 @@ ipcMain.handle('btc', async (_e, command, a) => {
     const env = c.bitcoin.source === 'bitcoind' && !c.bitcoin.cookie && c.bitcoin.password ? { ARCA_BITCOIND_PASSWORD: c.bitcoin.password } : {};
     return btcCall('create', Object.assign({}, c.bitcoin, { birthday_height: a && a.birthday_height }), { env });
   }
-  return btcCall(command, a || {});
+  const out = await btcCall(command, a || {});
+  // What a payment or a refresh made gets its renewal scheduled at once.
+  if (out.ok && ['send', 'refresh'].includes(command)) scheduleRenewals().catch(() => {});
+  return out;
 });
 // What the Bitcoin side holds: Bark's ark balance and its on-chain wallet,
 // and their total in satoshis, as BTC's row counts it.
@@ -335,7 +354,13 @@ ipcMain.handle('btc-summary', async () => {
   const ark = await btcCall('balance');
   const onchain = await btcCall('onchain_balance');
   if (!ark.ok || !onchain.ok) return { ok: false, refusal: (ark.ok ? onchain : ark).refusal, notes: [] };
-  return { ok: true, result: { wallet: true, ark: ark.result, onchain: onchain.result, total: btcTotal(ark.result, onchain.result) } };
+  // A renewal scheduled with the server is counted by Bark beside the coin it
+  // renews: it is not BTC on top.
+  const [v, r] = [await btcCall('vtxos'), await btcCall('round_list')];
+  const ahead = v.ok && r.ok ? scheduledAhead(v.result, r.result) : 0;
+  const a = Object.assign({}, ark.result);
+  if (ahead && Number.isFinite(a.pending_in_round_sat)) { a.pending_in_round_sat = Math.max(0, a.pending_in_round_sat - ahead); a.renewal_scheduled_sat = ahead; }
+  return { ok: true, result: { wallet: true, ark: a, onchain: onchain.result, total: btcTotal(a, onchain.result) } };
 });
 ipcMain.handle('btc-receive', async (_e, a) => {
   const out = await btcCall('ln_receive', a || {});
@@ -471,8 +496,10 @@ if (!app.requestSingleInstanceLock()) {
     stopClaim('the app is stopping');
     if (btcTimer) clearInterval(btcTimer);
     if (swapTimer) clearTimeout(swapTimer);
-    Promise.race([Promise.all([runner ? runner.stop(20000) : Promise.resolve(), btcRunner ? btcRunner.stop(40000) : Promise.resolve()]),
-      new Promise((r) => setTimeout(r, 45000))])
+    // Before it stops, every coin gets the renewal that runs with the app closed.
+    const renew = btcWallet() ? Promise.race([scheduleRenewals().catch(() => {}), new Promise((r) => setTimeout(r, 30000))]) : Promise.resolve();
+    renew.then(() => Promise.race([Promise.all([runner ? runner.stop(20000) : Promise.resolve(), btcRunner ? btcRunner.stop(40000) : Promise.resolve()]),
+      new Promise((r) => setTimeout(r, 45000))]))
       .finally(() => app.exit(0));
   });
   app.on('window-all-closed', () => app.quit());
